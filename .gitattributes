@@ -1,0 +1,6 @@
+# saltos de línea LF en el repositorio; los datos binarios nunca se convierten
+* text=auto eol=lf
+*.bin binary
+*.gz binary
+*.webp binary
+*.png binary

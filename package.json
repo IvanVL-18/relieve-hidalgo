@@ -1,0 +1,40 @@
+{
+  "name": "relieve-hidalgo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Relieve 3D interactivo del estado de Hidalgo (three.js + React + TypeScript), listo para integrarse como componente.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "data:fetch": "node scripts/pipeline/fetch.mjs",
+    "data": "node scripts/pack-data.mjs && node scripts/pipeline/build-usv.mjs && node scripts/pipeline/build-poblacion.mjs && node scripts/pipeline/build-servicios.mjs && node scripts/pipeline/build-vias.mjs && node scripts/pipeline/build-satelite.mjs",
+    "data:db": "node scripts/pipeline/db.mjs",
+    "shot": "node scripts/screenshot.mjs",
+    "perf": "npm run build && node scripts/perf.mjs"
+  },
+  "dependencies": {
+    "@fontsource/familjen-grotesk": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.1",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@types/three": "^0.186.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "fflate": "^0.8.3",
+    "pg": "^8.23.1",
+    "playwright-core": "^1.64.1",
+    "sharp": "^0.35.5",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.7",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}

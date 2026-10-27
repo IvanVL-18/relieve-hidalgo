@@ -1,0 +1,17 @@
+node_modules
+dist
+*.local
+.DS_Store
+
+# credenciales de la base de datos (plantilla en .env.example)
+.env
+
+# notas de trabajo locales del asistente
+CLAUDE.md
+
+# descargas y tablas intermedias: se regeneran con npm run data:fetch y npm run data
+data-src/cache
+data-src/out
+
+# capturas de scripts/screenshot.mjs
+shots

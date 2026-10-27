@@ -1,0 +1,78 @@
+import { useMemo, useRef, useState } from 'react';
+import { RelieveHidalgo, type BaseMapId, type MunicipioInfo, type ReadyInfo, type RelieveApi } from './relieve';
+import type { ReliefEngine } from './relieve/engine/Engine';
+import meta from './relieve/data/meta.json';
+
+/** En desarrollo deja el motor en window.__rh para scripts/screenshot.mjs. */
+const debugHooks = import.meta.env.DEV
+  ? {
+      debug: true,
+      onEngine: (e: ReliefEngine) => Object.assign(window, { __rh: e }),
+      onReady: (i: ReadyInfo) => Object.assign(window, { __rhTimings: i.timings }),
+    }
+  : {};
+
+/**
+ * Pantalla completa, como el artefacto. Parámetros: ?hora=19.5 · ?mapa=satelite|altitud · ?analisis=accesibilidad · ?quieto · ?embed
+ */
+export function App() {
+  const qs = new URLSearchParams(location.search);
+  if (qs.has('embed')) return <EmbedDemo />;
+  const hour = Number(qs.get('hora'));
+  return (
+    <RelieveHidalgo
+      style={{ position: 'fixed', inset: 0, height: 'auto' }}
+      initialHour={hour >= 5 && hour <= 20.5 ? hour : undefined}
+      initialBaseMap={(['usodesuelo', 'satelite', 'altitud'] as BaseMapId[]).find(b => b === qs.get('mapa'))}
+      initialAnalysis={qs.get('analisis')}
+      autoRotate={!qs.has('quieto')}
+      {...debugHooks}
+    />
+  );
+}
+
+/** Quintiles de un indicador → paleta secuencial (demo con la superficie de cada municipio). */
+function quintileColors(values: number[], codes: string[]) {
+  const palette = ['#2d1e4f', '#5b2a7a', '#9a3f72', '#d9674e', '#f6b04a'];
+  const sorted = [...values].sort((a, b) => a - b);
+  const cuts = [0.2, 0.4, 0.6, 0.8].map(q => sorted[Math.floor(q * (sorted.length - 1))]);
+  return Object.fromEntries(codes.map((c, i) => [c, palette[cuts.filter(t => values[i] > t).length]]));
+}
+
+function EmbedDemo() {
+  const api = useRef<RelieveApi>(null);
+  const [sel, setSel] = useState<MunicipioInfo | null>(null);
+  const [choro, setChoro] = useState(false);
+  const colors = useMemo(() => quintileColors(meta.cent.map(c => c[2]), meta.codes), []);
+  return (
+    <main className="demo">
+      <h1>Laboratorio · Demo de integración</h1>
+      <p>
+        El mapa es un componente React normal: llena su contenedor, se pausa cuando sale de la pantalla y la rueda del
+        ratón solo acerca con <kbd>Ctrl</kbd> para no robarle el scroll a la página.
+      </p>
+      <div className="demo-actions">
+        <button type="button" onClick={() => setChoro(!choro)}>{choro ? 'Quitar indicador' : 'Colorear por superficie municipal'}</button>
+        <button type="button" onClick={() => api.current?.flyToMunicipio('13048')}>Ir a Pachuca de Soto</button>
+        <button type="button" onClick={() => api.current?.goHome()}>Vista inicial</button>
+        <span>{sel ? `Seleccionado: ${sel.name} (${sel.code})` : 'Haz clic en un municipio'}</span>
+      </div>
+      <div className="demo-map">
+        <RelieveHidalgo
+          ref={api}
+          cooperativeGestures
+          autoRotate={false}
+          municipioColors={choro ? colors : null}
+          onSelectMunicipio={setSel}
+          {...debugHooks}
+        />
+      </div>
+      {Array.from({ length: 4 }, (_, i) => (
+        <p key={i} className="demo-filler">
+          Contenido de la página del laboratorio para probar el desplazamiento. Al bajar, el relieve deja de dibujarse y no
+          consume GPU; al volver, continúa donde se quedó.
+        </p>
+      ))}
+    </main>
+  );
+}

@@ -1,0 +1,12 @@
+html, body, #root { height: 100%; }
+body { margin: 0; background: #06080d; color: #eef1f5; font-family: system-ui, sans-serif; }
+
+/* página de demostración de integración (?embed) */
+.demo { max-width: 1080px; margin: 0 auto; padding: 32px 20px 120px; line-height: 1.6; }
+.demo h1 { font-size: 1.6rem; margin: 0 0 8px; }
+.demo kbd { font: 0.85em ui-monospace, monospace; padding: 1px 6px; border: 1px solid #333a48; border-radius: 4px; }
+.demo-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 16px 0; }
+.demo-actions button { font: inherit; font-size: 0.9rem; padding: 8px 14px; border-radius: 8px; border: 1px solid #333a48; background: #121722; color: inherit; cursor: pointer; }
+.demo-actions span { color: #8a92a3; font-size: 0.9rem; }
+.demo-map { height: min(620px, 78vh); border-radius: 16px; overflow: hidden; border: 1px solid #1d2330; }
+.demo-filler { color: #8a92a3; }
