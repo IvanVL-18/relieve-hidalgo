@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import type { Heightfield } from './heightfield';
 
-/** village: ≥ 500 hab.; hamlet: las demás localidades del ITER, solo de cerca */
-export type LabelKind = 'peak' | 'region' | 'city' | 'town' | 'village' | 'hamlet' | 'river' | 'lake';
+/** village: ≥ 500 hab.; hamlet: las demás localidades del ITER, solo de cerca; colonia: colonias del DENUE, muy de cerca */
+export type LabelKind = 'peak' | 'region' | 'city' | 'town' | 'village' | 'hamlet' | 'colonia' | 'river' | 'lake';
 
 export interface LabelItem {
   t: string;
@@ -31,6 +31,8 @@ export class Labels {
   readonly items: LabelItem[] = [];
   private placed: number[][] = [];
   private proj = new THREE.Vector3();
+  private inv = new THREE.Matrix4();
+  private cam = new THREE.Vector3();
   private pinEl: HTMLDivElement;
   private pin: THREE.Vector3 | null = null;
 
@@ -44,7 +46,7 @@ export class Labels {
   add(o: Omit<LabelItem, 'el' | 'p' | 'w' | 'on'>) {
     const g = this.hf.geo;
     const p = new THREE.Vector3(g.toX(o.lon), this.hf.surfaceLL(o.lat, o.lon) / 1000 + (o.lift ?? 0.02), g.toZ(o.lat));
-    const w = (o.t.length + (o.s ? o.s.length + 1 : 0)) * (o.k === 'region' ? 7.6 : o.k === 'village' ? 6.2 : o.k === 'hamlet' ? 5.8 : 7) + 14;
+    const w = (o.t.length + (o.s ? o.s.length + 1 : 0)) * (o.k === 'region' ? 7.6 : o.k === 'village' ? 6.2 : o.k === 'hamlet' ? 5.8 : o.k === 'colonia' ? 6.6 : 7) + 14;
     const item: LabelItem = { ...o, el: null, p, w, on: false };
     this.items.push(item);
     return item;
@@ -73,12 +75,17 @@ export class Labels {
   layout(camera: THREE.Camera, model: THREE.Matrix4, dist: number, layers: LabelLayers, w: number, h: number) {
     const placed = this.placed, proj = this.proj;
     placed.length = 0;
+    // las de cerca (localidades pequeñas y colonias) son miles: las que quedan lejos en planta se descartan sin proyectar
+    const cam = this.cam.copy(camera.position).applyMatrix4(this.inv.copy(model).invert()), e = model.elements;
+    const sxz = Math.hypot(e[0], e[1], e[2]), hamletFar = Math.min(0.3, dist * 2), coloniaFar = Math.min(0.2, dist * 1.8);
+    const near = (o: LabelItem, far: number) => (o.p.x - cam.x) ** 2 + (o.p.z - cam.z) ** 2 < (far / sxz) ** 2;
     for (const o of this.items) {
       let want = true;
       if (o.k === 'region') want = dist > 1.2;
       else if (o.k === 'town') want = layers.places && dist < 3.2;
       else if (o.k === 'village') want = layers.places && dist < 1.0;
-      else if (o.k === 'hamlet') want = layers.places && dist < 0.25;
+      else if (o.k === 'hamlet') want = layers.places && dist < 0.25 && near(o, hamletFar);
+      else if (o.k === 'colonia') want = layers.places && dist < 0.16 && near(o, coloniaFar);
       else if (o.k === 'city') want = layers.places || o.s === 'capital';
       else if (o.k === 'river' || o.k === 'lake') want = layers.water && dist < 3.6;
       let x = 0, y = 0;
@@ -86,17 +93,18 @@ export class Labels {
         proj.copy(o.p).applyMatrix4(model);
         const far = proj.distanceTo(camera.position);
         if (o.k === 'village' && far > 1.1) want = false;
-        if (o.k === 'hamlet' && far > Math.min(0.3, dist * 2)) want = false;
+        if (o.k === 'hamlet' && far > hamletFar) want = false;
+        if (o.k === 'colonia' && far > coloniaFar) want = false;
         if (o.k === 'town' && far > 3.6) want = false;
         proj.project(camera);
         if (proj.z > 1 || proj.x < -1.1 || proj.x > 1.1 || proj.y < -1.1 || proj.y > 1.1) want = false;
         x = (proj.x * 0.5 + 0.5) * w; y = (-proj.y * 0.5 + 0.5) * h;
       }
       if (want) {
-        const centered = o.k === 'region' || o.k === 'river' || o.k === 'lake';
+        const centered = o.k === 'region' || o.k === 'river' || o.k === 'lake' || o.k === 'colonia';
         const x0 = centered ? x - o.w / 2 : x - 4, y0 = y - 9;
-        // las localidades pequeñas piden más espacio libre alrededor, para que no se amontonen
-        const pad = o.k === 'hamlet' ? 10 : 3;
+        // localidades pequeñas y colonias piden más espacio libre alrededor, para que no se amontonen
+        const pad = o.k === 'hamlet' ? 10 : o.k === 'colonia' ? 13 : 3;
         const box = [x0 - pad, y0 - pad + 1, x0 + o.w + pad, y0 + 17 + pad];
         for (const b of placed) if (box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1]) { want = false; break; }
         if (want) {

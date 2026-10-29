@@ -49,6 +49,7 @@ export interface ExtraPlaces {
   muni: ArrayLike<number>;
   tipo: ArrayLike<number>;
   sub: ArrayLike<number>;
+  negocios: ArrayLike<number>;
   nombre: string[]; tipos: string[]; localidades: string[];
 }
 

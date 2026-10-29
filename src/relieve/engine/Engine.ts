@@ -17,7 +17,7 @@ import type { CompareHandle, CompareSpec, GridImage, MapApi, MapHit } from './ma
 import { Minimap } from './minimap';
 import { Overlays } from './overlays';
 import { Curtain, Rasters, makePalette, type RasterHandle } from './rasters';
-import { buildIndex, extraIndex, prettyRiver, search, type ExtraPlaces, type PlaceColumns, type SearchItem } from './search';
+import { buildIndex, extraIndex, fold, prettyRiver, search, type ExtraPlaces, type PlaceColumns, type SearchItem } from './search';
 import { mexicoDate, sunPosition, sunTimes, todayInMexico } from './sun';
 import { TerrainLod } from './terrain';
 import { TerrainService } from './terrainService';
@@ -865,14 +865,26 @@ export class ReliefEngine {
 
   /**
    * Suma al buscador las localidades del ITER sin etiqueta y los lugares de lugares.bin (localidades del catálogo de
-   * INEGI y colonias); las localidades pequeñas también se etiquetan al acercarse. Devuelve cuántos lugares agregó.
+   * INEGI y colonias). Las localidades pequeñas se etiquetan al acercarse y las colonias muy de cerca (primero las de
+   * más negocios); ambas cuentan para el «cerca de…» del cursor. Devuelve cuántos lugares agregó al buscador.
    */
   addPlaces(loc: PlaceColumns, lug: ExtraPlaces | null) {
     const items = extraIndex(this.index, meta, loc, lug);
     this.index.push(...items);
-    for (const it of items) if (it.kind === 'Localidad' && it.pop) this.placeItems.push({ t: it.n, lon: it.lon, lat: it.lat, kind: 3 });
+    for (const it of items) {
+      if (it.kind !== 'Localidad' || !it.pop) continue;
+      this.placeItems.push({ t: it.n, lon: it.lon, lat: it.lat, kind: 3 });
+      this.labels?.add({ t: it.n, lat: it.lat, lon: it.lon, k: 'hamlet', pri: 8, pop: it.pop });
+    }
+    for (let i = 0; lug && i < lug.n; i++) {
+      const t = lug.tipo[i];
+      if (!t) continue;
+      const n = lug.nombre[i], tipo = lug.tipos[t];
+      // en el cursor, con su tipo si el nombre no lo trae: «Colonia Venta Prieta», «Barrio Alto»
+      this.placeItems.push({ t: tipo === 'Asentamiento' || fold(n).startsWith(fold(tipo)) ? n : `${tipo} ${n}`, lon: lug.lon[i], lat: lug.lat[i], kind: 4 });
+      this.labels?.add({ t: n, lat: lug.lat[i], lon: lug.lon[i], k: 'colonia', pri: 9, pop: lug.negocios[i] });
+    }
     if (this.labels) {
-      for (const it of items) if (it.kind === 'Localidad' && it.pop) this.labels.add({ t: it.n, lat: it.lat, lon: it.lon, k: 'hamlet', pri: 8, pop: it.pop });
       this.labels.sort();
       this.labelsDirty = true;
       this.invalidate();
@@ -1299,8 +1311,9 @@ export class ReliefEngine {
     let best: (typeof this.placeItems)[number] | null = null, bd = maxKm * maxKm;
     for (const p of this.placeItems) {
       const dx = (p.lon - lon) * g.KX, dz = (p.lat - lat) * g.KZ, d = dx * dx + dz * dz;
-      // ciudades y pueblos cuentan en todo el radio; las localidades de ≥ 500 hab. en el 60 % y las menores en el 40 %
-      if (d < bd && (p.kind < 2 || d < (maxKm * (p.kind === 2 ? 0.6 : 0.4)) ** 2)) { bd = d; best = p; }
+      // ciudades y pueblos cuentan en todo el radio; las localidades de ≥ 500 hab. en el 60 %, las menores en el 40 % y
+      // las colonias en el 15 % (≈ 600 m: dentro de una ciudad, la colonia más cercana)
+      if (d < bd && (p.kind < 2 || d < (maxKm * [0, 0, 0.6, 0.4, 0.15][p.kind]) ** 2)) { bd = d; best = p; }
     }
     return best ? { p: best, km: Math.sqrt(bd) } : null;
   }

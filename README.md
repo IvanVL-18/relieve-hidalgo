@@ -19,7 +19,7 @@ que se puede incrustar en cualquier sitio React.
 - Sol en su posición real para la hora elegida; de noche se encienden las 4 690 localidades según su población.
 - Buscador con los 84 municipios, las 5 297 localidades de INEGI (las 4 690 del censo y las deshabitadas o de una o
   dos viviendas del catálogo de localidades), ~2 800 colonias, fraccionamientos y barrios, ríos y presas. De cerca se
-  etiquetan todas las localidades del censo.
+  etiquetan todas las localidades del censo y, más de cerca, las colonias de las ciudades.
 - Ficha por municipio (población, superficie, altitudes), minimapa, imagen descargable con créditos y pantalla
   completa.
 

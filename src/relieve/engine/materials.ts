@@ -178,6 +178,23 @@ export function createTerrainMaterial(u: TerrainUniforms, defines: Record<string
         vec2 rhMuni2(ivec2 p) { return texelFetch(tMuni, clamp(p, ivec2(0), ivec2(uGrid)), 0).rg; }
         vec4 rhPal(float row, float i) { return textureLod(tPalette, vec2((i + 0.5) / 256.0, (row + 0.5) / ${PALETTE_ROWS}.0), 0.0); }
         vec4 rhChoro(float m) { vec4 c = rhPal(0.0, m); return vec4(c.rgb * c.a, c.a); }
+        // ríos (x) y límites (y): distancia con signo en texeles (raíz cuadrada, ver lineField)
+        vec2 rhLineS(ivec2 p) {
+          vec2 q = (texelFetch(tLines, clamp(p, ivec2(0), ivec2(int(uLinesSize) - 1)), 0).rg * 255.0 - 128.0) / 127.0;
+          return sign(q) * q * q * uLinesRange;
+        }
+        // interpolada a mano entre los 4 texeles vecinos: con signo es exacta junto a un tramo recto (las líneas finas no
+        // se cortan de cerca); si ningún vecino está a menos de 0.75 texeles, sin signo, para no inventar una línea donde
+        // cambia el lado entre dos líneas cercanas
+        vec2 rhLineDist(vec2 uv) {
+          vec2 t = uv * uLinesSize - 0.5, f = fract(t);
+          ivec2 i = ivec2(floor(t));
+          vec2 a = rhLineS(i), b = rhLineS(i + ivec2(1, 0)), c = rhLineS(i + ivec2(0, 1)), d = rhLineS(i + ivec2(1, 1));
+          vec2 s = mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+          vec2 u = mix(mix(abs(a), abs(b), f.x), mix(abs(c), abs(d), f.x), f.y);
+          vec2 m = min(min(abs(a), abs(b)), min(abs(c), abs(d)));
+          return mix(abs(s), u, step(0.75, m));
+        }
         // borde suave: fracción bilineal de las 4 celdas vecinas que pertenecen al municipio m
         float rhShare(float m, vec4 ids, vec4 w) { return dot(vec4(equal(ids, vec4(m))), w); }
         float contourLine(float h, float dh, float interval, float width) {
@@ -305,19 +322,20 @@ export function createTerrainMaterial(u: TerrainUniforms, defines: Record<string
         float bline = 0.0, deep = 0.0;
         rhWater = 0.0;
         if (uLines > 0.0) {
-          vec4 lf = texture2D(tLines, vWUv);
+          vec4 lf = texture2D(tLines, vWUv);                        // presas (b) y tamaño del río (a)
+          vec2 ld = rhLineDist(vWUv);                               // texeles a ríos (x) y límites (y)
           float tpp = max(max(dUv.x, dUv.y) * uLinesSize, 1e-4);   // texeles por píxel
           float mpp = tpp * uLinesTexelM;                           // metros por píxel
           float acc = lf.a;
           float halfPx = 0.5 * max(mix(0.8, 2.6, pow(acc, 1.2)), mix(8.0, 90.0, pow(acc, 1.5)) / mpp);
-          float river = (1.0 - smoothstep(halfPx - 0.6, halfPx + 0.6, lf.r * uLinesRange / tpp)) * step(lf.r, 0.996);
+          float river = (1.0 - smoothstep(halfPx - 0.6, halfPx + 0.6, ld.x / tpp)) * step(ld.x, uLinesRange * 0.98);
           // los arroyos se atenúan al alejarse; los ríos grandes no
           river *= mix(clamp(1.2 / tpp, 0.25, 1.0), 1.0, smoothstep(0.05, 0.4, acc));
           float dLake = (lf.b * 255.0 - 128.0) / 127.0 * uLinesRange;   // texeles, negativo dentro
           float lake = 1.0 - smoothstep(-0.6, 0.6, dLake / tpp);
           rhWater = max(river, lake) * uWater;
           deep = max(smoothstep(0.5, 7.0, -dLake), smoothstep(0.3, 1.0, acc) * 0.75 * river);
-          bline = 1.0 - smoothstep(0.15, 1.3, lf.g * uLinesRange / tpp);
+          bline = 1.0 - smoothstep(0.15, 1.3, ld.y / tpp);
         }
         if (uChoroAmt > 0.0) {
           vec4 ch = rhChoro(ids.x) * tw.x + rhChoro(ids.y) * tw.y + rhChoro(ids.z) * tw.z + rhChoro(ids.w) * tw.w;

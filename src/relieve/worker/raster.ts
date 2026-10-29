@@ -20,9 +20,14 @@ function fillLakes(ctx: Ctx, v: VecData, sx: number, sy: number) {
 }
 
 /**
- * Campos de distancia de las líneas sobre una textura de size × size (RGBA, ver LinesResult): cada canal guarda la
- * distancia en texeles hasta la línea más cercana, de 0 a range (255 = más lejos). El texel (i, j) cubre las
+ * Campos de distancia de las líneas sobre una textura de size × size (RGBA, ver LinesResult). El texel (i, j) cubre las
  * celdas i·(W − 1)/size … (i + 1)·(W − 1)/size, igual que la coordenada de textura del terreno.
+ *   r, g  ríos y límites: distancia con signo (lado del tramo más cercano), en raíz cuadrada: 128 ± 127·√(d / range);
+ *         255 = sin línea a menos de range texeles. Con signo, interpolar entre texeles reproduce exacta la distancia
+ *         a un tramo recto (sin signo, una línea entre dos filas de texeles quedaba a medio texel, ~25 m, y las finas se
+ *         cortaban de cerca); la raíz da precisión de centímetros junto a la línea.
+ *   b     presas: distancia con signo lineal, negativa dentro.
+ *   a     tamaño (área drenada) del río más cercano.
  * Solo se recorre una franja de ancho range alrededor de cada tramo, con la distancia exacta al segmento.
  */
 export function lineField(v: VecData, W: number, H: number, size: number, range: number) {
@@ -62,11 +67,12 @@ export function lineField(v: VecData, W: number, H: number, size: number, range:
         t = t < 0 ? 0 : t > 1 ? 1 : t;
         const qx = wx - t * dx, qy = wy - t * dy, d2 = qx * qx + qy * qy;
         if (d2 >= R2) continue;
-        const q = (Math.sqrt(d2) * k + 0.5) | 0, p = y * size + x;
-        if (ch < 0) { if (q < lakeD[p]) lakeD[p] = q; continue; }
-        const o = p * 4 + ch;
-        if (q < out[o]) { out[o] = q; if (ch === 0) out[p * 4 + 3] = acc; }
-        else if (ch === 0 && q === out[o] && acc > out[p * 4 + 3]) out[p * 4 + 3] = acc;
+        const p = y * size + x;
+        if (ch < 0) { const q = (Math.sqrt(d2) * k + 0.5) | 0; if (q < lakeD[p]) lakeD[p] = q; continue; }
+        // magnitud en raíz cuadrada; signo según el lado del tramo (producto cruz)
+        const m = Math.round(127 * Math.sqrt(Math.sqrt(d2) / R)), o = p * 4 + ch, cur = Math.abs(out[o] - 128);
+        if (m < cur) { out[o] = dx * wy - dy * wx >= 0 ? 128 + m : 128 - m; if (ch === 0) out[p * 4 + 3] = acc; }
+        else if (ch === 0 && m === cur && acc > out[p * 4 + 3]) out[p * 4 + 3] = acc;
       }
     }
   };
