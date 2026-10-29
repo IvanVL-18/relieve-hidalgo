@@ -1,4 +1,4 @@
-import type { FlowPath, GridKind, Profile, TerrainApi, TerrainGrid, Watershed } from '../shared/terrain';
+import type { Flood, FlowPath, GridKind, Profile, TerrainApi, TerrainGrid, Watershed } from '../shared/terrain';
 import type { DetailResult, GridMeta, TerrainMessage, TerrainOp, TerrainRequest, TilePackInfo } from '../shared/types';
 
 export interface TerrainServiceOptions {
@@ -68,6 +68,7 @@ export class TerrainService implements TerrainApi {
   grid(kind: GridKind, bounds: [number, number, number, number], res: 30 | 90 = 90) { return this.query<TerrainGrid>('grid', { kind, bounds, res }); }
   watershed(lon: number, lat: number, snapM?: number) { return this.query<Watershed>('watershed', { lon, lat, snapM }); }
   flowPath(lon: number, lat: number, maxKm?: number) { return this.query<FlowPath>('flowpath', { lon, lat, maxKm }); }
+  flood(lon: number, lat: number, opts: { mode?: 'rio' | 'valle'; radiusKm?: number; maxRise?: number } = {}) { return this.query<Flood>('flood', { lon, lat, ...opts }); }
 
   dispose() {
     this.closed = true;

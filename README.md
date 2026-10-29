@@ -2,7 +2,7 @@
 
 Modelo 3D interactivo del estado de Hidalgo con datos oficiales: relieve real, uso de suelo de INEGI, imagen
 satelital, ríos, presas, municipios y localidades, luz solar según la hora y vista nocturna. Además incluye análisis de
-población, marginación y acceso a servicios. Está hecho con React, TypeScript y three.js y funciona como un componente
+población, marginación, acceso a servicios, cuencas, inundación, laderas y cambio de uso de suelo. Está hecho con React, TypeScript y three.js y funciona como un componente
 que se puede incrustar en cualquier sitio React.
 
 ![Uso de suelo de INEGI sobre el relieve](docs/uso-de-suelo.webp)
@@ -31,8 +31,12 @@ que se puede incrustar en cualquier sitio React.
 | Localidades | Las 4 690 localidades del censo: filtros por tamaño, marginación y las más aisladas |
 | Relieve y marginación | Si la marginación se concentra en el terreno abrupto: mapa bivariado, dispersión y correlación |
 | Accesibilidad | Carreteras y tiempo de traslado al hospital, centro de salud o escuela más cercano; rutas al hacer clic |
+| Cuencas | Clic en un punto: toda el área cuya lluvia escurre hasta ahí, su cauce principal, por dónde sigue el agua río abajo, y la ficha con área, desnivel, pendiente, población, municipios y ríos |
+| Simulador de inundación | Sube el nivel de un río (altura sobre su cauce) o de un valle (relleno hasta un nivel) y muestra la profundidad, el área, las localidades, los hospitales, escuelas y carreteras bajo el agua. Ilustrativo, no pronóstico |
+| Laderas inestables | Susceptibilidad a deslizamientos por pendiente (30 m), lluvia intensa, tipo de roca y cobertura vegetal, con el desglose de puntos de cada lugar, localidades y carreteras expuestas, comparación con el atlas estatal del CENAPRED y validación con los deslizamientos registrados |
+| Cambio de uso de suelo | Series VI (2014) y VII (2018) de INEGI: pérdida de bosque, urbanización, degradación y recuperación, con matriz de cambio por municipio y cortina para comparar |
 
-El menú también muestra los análisis planeados («Próximamente»): cuencas, inundación, perfil de elevación, antenas,
+El menú también muestra los análisis planeados («Próximamente»): perfil de elevación, antenas,
 potencial solar, movilidad, recorridos guiados, impresión 3D y más. Las piezas que necesitan ya están en la base: capas
 raster con su propia cobertura y paleta, cortina para comparar, y consultas de elevación, pendiente, cuencas y camino
 del agua (ver «Agregar un análisis»).
@@ -49,7 +53,8 @@ npm install
 npm run dev
 ```
 
-Parámetros útiles en la URL: `?analisis=accesibilidad` (o `poblacion`, `localidades`, `marginacion`),
+Parámetros útiles en la URL: `?analisis=accesibilidad` (o `poblacion`, `localidades`, `marginacion`, `cuencas`, `inundacion`, `laderas`,
+`cambio-uso`),
 `?mapa=satelite` o `?mapa=altitud`, `?hora=19.5` y `?embed` (el mapa dentro de una página normal).
 
 Los datos procesados ya vienen en `src/relieve/data/`, así que no hace falta descargar nada para correrlo.
@@ -109,7 +114,7 @@ teselas de elevación y de ahí saca el relieve del visor (270 m), el de 90 m, l
 direcciones de flujo y las estadísticas por municipio y localidad. Si Overpass no responde, los ríos y presas salen de
 la copia `data-src/osm_agua.json.gz`.
 
-Los datos procesados pesan ~37 MB, pero al abrir el mapa se descargan ~4 MB; el resto (relieve de 30 m e imagen fina)
+Los datos procesados pesan ~39 MB, pero al abrir el mapa se descargan ~4 MB (cada análisis baja sus capas al abrirse); el resto (relieve de 30 m e imagen fina)
 llega por partes al acercarse.
 
 ### Pruebas
@@ -123,8 +128,8 @@ npm run visual              # las vuelve a capturar y marca en rojo lo que cambi
 Las referencias visuales dependen de la tarjeta gráfica: se comparan en el mismo equipo.
 
 La base de datos (esquema `relieve`) tiene municipios, localidades con minutos al servicio más cercano, servicios,
-lugares (localidades fuera del censo y colonias), uso de suelo, la red de ríos con orden de Strahler, la red vial como
-grafo y vistas para consultas frecuentes. El mapa
+lugares (localidades fuera del censo y colonias), uso de suelo (Series VII y VI), la red de ríos con orden de Strahler, deslizamientos registrados y
+susceptibilidad de laderas por municipio, la red vial como grafo y vistas para consultas frecuentes. El mapa
 no la necesita: lee archivos estáticos comprimidos. La base es para consultas, análisis y la API del laboratorio.
 
 ### Fuentes y licencias
@@ -133,7 +138,12 @@ no la necesita: lee archivos estáticos comprimidos. La base es para consultas, 
 |---|---|---|
 | Elevación | INEGI, Continental relief 2016, y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS Open Data) | Términos de libre uso del INEGI; USGS: dominio público |
 | Límites municipales | INEGI, Marco Geoestadístico 2022 | Términos de libre uso del INEGI |
-| Uso del suelo y vegetación | INEGI, Serie VII 1:250 000 (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
+| Uso del suelo y vegetación | INEGI, Series VII y VI 1:250 000 (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
+| Lluvia media anual (comparación en laderas) | INEGI, precipitación media anual 1910–2009 (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
+| Lluvia intensa (laderas) | Climate Hazards Center (UCSB), CHIRPS v3.0, lluvia por pentadas a 0.05° | Dominio público (citar doi:10.15780/G2JQ0P) |
+| Tipo de roca (laderas) | INEGI, geología 1:250 000 serie I (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
+| Deslizamientos y zonas de peligro | CENAPRED, Atlas Nacional de Riesgos: atlas estatal de Hidalgo | Información pública del Gobierno de México |
+| Deslizamientos registrados | NASA, Global Landslide Catalog | Datos abiertos de la NASA |
 | Población, localidades y luces nocturnas | INEGI, Censo de Población y Vivienda 2020 (ITER) | Términos de libre uso del INEGI |
 | Localidades que el censo agrupa o no tienen habitantes | INEGI, Catálogo Único de Claves de Áreas Geoestadísticas (servicio web) | Términos de libre uso del INEGI |
 | Colonias, fraccionamientos y barrios (buscador) | INEGI, DENUE: asentamiento de cada dirección, en la mediana de sus negocios | Términos de libre uso del INEGI |
@@ -158,8 +168,19 @@ Estas atribuciones aparecen en el mapa y en la imagen descargable, y deben conse
   territorio supera 15° a 30 m contra 23 % a 270 m). Las cifras del visor y de la base usan 30 m.
 - Los **ríos** son la red de drenaje calculada del relieve a 90 m (guiada por los ríos de OpenStreetMap), no la red
   hidrográfica oficial de INEGI: sirven para ver por dónde corre el agua, no para deslindar cauces.
-- Las **cuencas** se calculan dentro de la zona del mapa (Hidalgo y ~1 km alrededor): lo que drena desde otros estados
-  (por ejemplo, el río Tula desde el valle de México) no se cuenta. El resultado lo avisa con `truncated`.
+- Las **cuencas** se calculan dentro del rectángulo que cubre el mapa (Hidalgo y un margen de los estados vecinos): lo
+  que drena desde más lejos (por ejemplo, el río Tula desde el valle de México) no se cuenta, ni el agua que el valle
+  de México manda al río Tula por sus drenajes. El análisis lo avisa. La cuenca del Amajac antes de unirse al Moctezuma da 6 991 km², contra
+  6 954 km² publicados para su subcuenca.
+- La **inundación** es ilustrativa: llena el terreno hasta un nivel (o a cierta altura sobre el cauce) sin caudal, lluvia,
+  tiempo, bordos ni drenaje, y el relieve de 30 m tiene errores de metros en lo plano. No es un pronóstico.
+- **Laderas** es un índice propio de susceptibilidad (pendiente, lluvia intensa, roca y cobertura): dice dónde el terreno
+  es más propenso a deslizarse, no cuándo. El Mapa Nacional de Susceptibilidad del CENAPRED aún no se publica para
+  Hidalgo; el análisis se compara con las zonas de peligro del atlas estatal y con 216 deslizamientos registrados en
+  2008 y 2009: el 54 % cayó en las laderas de susceptibilidad alta o muy alta, que ocupan el 20 % del estado. Esos
+  registros están junto a caminos y poblados, donde alguien los reportó.
+- El **cambio de uso de suelo** compara series 1:250 000: los cambios pequeños no se ven y parte de las diferencias son
+  de interpretación entre series.
 - En las planicies, el relieve de INEGI trae un rayado; al acercarse, el sombreado de 30 m se usa solo en laderas.
 
 ![Hidalgo de noche](docs/noche.webp)

@@ -20,6 +20,8 @@
  *   vec.bin          RHV1: ríos (drenaje a 90 m guiado por OSM), presas, límites municipales, contorno del estado
  *                    y localidades del ITER (luces nocturnas), gzip
  *   capas/flujo-90m.bin  RHH1: dirección del flujo D8 a 90 m (cuencas y trayectorias del agua en los análisis), gzip
+ *   capas/rios-nombres.bin  RHR1: celdas del cauce de 90 m con el nombre de su río en OSM (ríos de una cuenca), gzip
+ *   capas/pendiente.bin  RHT1: pendiente a 30 m resumida por nodo del visor (media, % > 15° y > 30°), gzip
  *   data-src/out/relieve_municipios.json · rios.json   para los demás pasos y la base de datos
  *
  * Uso: node scripts/pipeline/build-relieve.mjs
@@ -27,7 +29,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { CACHE, GRID, LAYERS, OUT, ROOT, dms, fillPolygon, kb, log, readIter, writeGz, writeJSON, writePack } from './lib.mjs';
+import { BinWriter, CACHE, GRID, LAYERS, OUT, ROOT, dms, fillPolygon, kb, log, readIter, writeGz, writeJSON, writePack } from './lib.mjs';
 import { RELIEF_CREDIT, SOURCES } from './sources.mjs';
 import { DETAIL, FINE, KX, KZ, TILE, boxDown, colOf, gradientPlanes, latOfRow, loadFine, lonOfCol, rowOf, sub } from './dem.mjs';
 import { accumulate, burnLines, chaikin, channelNetwork, flowDir, priorityFlood } from './hidro.mjs';
@@ -170,6 +172,35 @@ const relieveMun = feats.map((f, k) => {
 });
 writeJSON(path.join(OUT, 'relieve_municipios.json'), relieveMun);
 lap(`estadísticas a 30 m: punto más alto ${peak[2]} m (${feats[peakM - 1].properties.NOMGEO}), mínimo ${Math.round(stateMin)} m`);
+{
+  // Pendiente a 30 m resumida por nodo del visor (los 9 × 9 nodos de 30 m más cercanos), para medir a 30 m cualquier
+  // zona sin bajar las teselas (cuencas): u32 'RHT1' · W · H · u8 media[W·H] en cuartos de grado (máx. 63.75°)
+  // · u8 p15[W·H] · u8 p30[W·H] (fracción de nodos con más de 15° y de 30°, × 200). Misma fórmula que las de municipio.
+  const { w, h, dxm, dzm } = F9, e = fine.data, n = W * H;
+  const sum = new Float32Array(n), cnt = new Uint16Array(n), c15 = new Uint16Array(n), c30 = new Uint16Array(n);
+  for (let r = 1; r < h - 1; r++) {
+    const row = Math.round(r / FINE) * W;
+    for (let c = 1; c < w - 1; c++) {
+      const i = r * w + c;
+      if (!(e[i] > 0 && e[i - 1] > 0 && e[i + 1] > 0 && e[i - w] > 0 && e[i + w] > 0)) continue;
+      const gx = (e[i + 1] - e[i - 1]) / (2 * dxm), gz = (e[i + w] - e[i - w]) / (2 * dzm);
+      const sl = (Math.atan(Math.hypot(gx, gz)) * 180) / Math.PI, k = row + Math.round(c / FINE);
+      sum[k] += sl; cnt[k]++;
+      if (sl > 15) c15[k]++;
+      if (sl > 30) c30[k]++;
+    }
+  }
+  // solo hasta ~3 km del estado, como relieve-90m (lo demás, 0 = sin dato, casi no pesa)
+  const mean = new Uint8Array(n), p15 = new Uint8Array(n), p30 = new Uint8Array(n), zone = nearState(12);
+  for (let k = 0; k < n; k++) {
+    if (!cnt[k] || !zone[k]) continue;
+    mean[k] = Math.min(255, Math.max(1, Math.round((sum[k] / cnt[k]) * 4)));
+    p15[k] = Math.round((200 * c15[k]) / cnt[k]); p30[k] = Math.round((200 * c30[k]) / cnt[k]);
+  }
+  const b = new BinWriter();
+  b.u32([0x31544852, W, H]); b.u8(mean); b.u8(p15); b.u8(p30);
+  log(`capas/pendiente.bin ${kb(writeGz(path.join(LAYERS, 'pendiente.bin'), b.buffer()))}`);
+}
 
 /* ================= zona de Hidalgo (para recortar ríos y presas) ================= */
 /** Nodos de la rejilla del visor a menos de n celdas del estado. */
@@ -209,7 +240,7 @@ const hydro = { segs: [], dir: null };
   const filled = priorityFlood(z, w, h);
   const dir = flowDir(filled, w, h, dxm, dzm), acc = accumulate(dir, w, h);
   const segs = channelNetwork(dir, acc, w, h, T_KM2 / cellKm2);
-  hydro.dir = dir;
+  hydro.dir = dir; hydro.acc = acc;
   for (const s of segs) {
     const pts = s.cells.map(i => [(i % w) / DETAIL, Math.floor(i / w) / DETAIL, acc[i] * cellKm2]);
     if (!pts.some(([c, r], k) => (k % 4 === 0 || k === pts.length - 1) && atNode(near6, c, r))) continue;
@@ -230,6 +261,42 @@ writeJSON(path.join(OUT, 'rios.json'), hydro.segs.map(s => ({ orden: s.order, ar
   head.writeUInt32LE(0x31484852, 0); head.writeUInt32LE(F3.w, 4); head.writeUInt32LE(F3.h, 8); head.writeUInt32LE(DETAIL, 12);
   const n = writeGz(path.join(LAYERS, 'flujo-90m.bin'), Buffer.concat([head, Buffer.from(hydro.dir.buffer)]));
   log(`capas/flujo-90m.bin ${kb(n)}`);
+}
+{
+  // Nombres de los ríos de OSM sobre el cauce calculado (ríos de una cuenca, por dónde sigue el agua):
+  // u32 'RHR1' · u32 n · u32 celda[n] (fila · w + columna de la rejilla de 90 m, en orden) · u16 río[n] · textos (nombres).
+  // Cada tramo de OSM se muestrea cada media celda y se lleva a la celda de más área drenada a ≤ 2 celdas (el drenaje
+  // se guió con esas mismas líneas); en una confluencia la celda se queda con el río más largo.
+  const { w, h } = F3, acc = hydro.acc, byRiver = new Map();
+  for (const e of riverEls) {
+    const nm = e.tags?.name?.trim();
+    if (!nm || nm.length < 4) continue;
+    const name = (nm[0].toUpperCase() + nm.slice(1)).replace(/^Rio /, 'Río ');
+    for (const g of linesOf(e)) (byRiver.get(name) || byRiver.set(name, []).get(name)).push(g.map(p => [colOf(p.lon) * DETAIL, rowOf(p.lat) * DETAIL]));
+  }
+  const lenOf = gs => gs.reduce((s, g) => s + g.reduce((t, p, k) => (k ? t + Math.hypot(p[0] - g[k - 1][0], p[1] - g[k - 1][1]) : 0), 0), 0);
+  const names = [...byRiver.keys()].sort((a, b) => lenOf(byRiver.get(b)) - lenOf(byRiver.get(a)));
+  const cellRiver = new Map();
+  names.forEach((name, id) => {
+    for (const g of byRiver.get(name)) for (let k = 1; k < g.length; k++) {
+      const [x0, y0] = g[k - 1], [x1, y1] = g[k], steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 2));
+      for (let q = 0; q <= steps; q++) {
+        const x = Math.round(x0 + ((x1 - x0) * q) / steps), y = Math.round(y0 + ((y1 - y0) * q) / steps);
+        let best = -1;
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+          const xx = x + dx, yy = y + dy, j = yy * w + xx;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h || dx * dx + dy * dy > 5) continue;
+          if (best < 0 || acc[j] > acc[best]) best = j;
+        }
+        if (best >= 0 && !cellRiver.has(best)) cellRiver.set(best, id);
+      }
+    }
+  });
+  const cells = [...cellRiver.keys()].sort((a, b) => a - b), used = [...new Set(cells.map(c => cellRiver.get(c)))].sort((a, b) => a - b);
+  const idOf = new Map(used.map((id, k) => [id, k]));
+  const b = new BinWriter();
+  b.u32([0x31524852, cells.length]); b.u32(cells); b.u16(cells.map(c => idOf.get(cellRiver.get(c)))); b.str(used.map(id => names[id]));
+  log(`capas/rios-nombres.bin ${kb(writeGz(path.join(LAYERS, 'rios-nombres.bin'), b.buffer()))} (${used.length} ríos, ${cells.length} celdas)`);
 }
 
 /* ================= presas y lagos ================= */

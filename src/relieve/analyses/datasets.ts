@@ -60,6 +60,52 @@ export interface Servicios {
   nombre: string[]; detalle: string[];
 }
 
+/**
+ * Pendiente medida a 30 m, resumida por nodo de la rejilla del visor (W × H): sirve para medir a 30 m cualquier zona
+ * (una cuenca) sin bajar las teselas. Media en cuartos de grado (0 = sin dato); p15 y p30 = fracción × 200.
+ */
+export interface Pendiente { w: number; h: number; mean: Uint8Array; p15: Uint8Array; p30: Uint8Array }
+
+/**
+ * Nombres de los ríos de OSM sobre el cauce calculado a 90 m: celda (fila · w + columna de la rejilla de flujo, en
+ * orden creciente) e índice del río en `nombres`.
+ */
+export interface RiosNombres { n: number; cell: Uint32Array; rio: Uint16Array; nombres: string[] }
+
+/** Uso del suelo y vegetación por clases (INEGI, una serie) en la rejilla de ≈ 65 m: factor f del visor; 0 = sin dato. */
+export interface UsoSuelo {
+  w: number; h: number; f: number;
+  clase: Uint8Array;
+  /** clase k = clases[k − 1]; grupo = índice en USV_GROUPS; sec = vegetación secundaria */
+  clases: { clave: string; nombre: string; grupo: number; sec: boolean }[];
+}
+
+/**
+ * Susceptibilidad de laderas (índice propio) a ≈ 90 m, f = factor del visor: tres planos de w·h bytes con la clase, sus
+ * factores y las zonas de peligro del atlas estatal (empaque en shared/laderas.ts); la rejilla de lluvia de CHIRPS y los
+ * deslizamientos registrados.
+ */
+export interface Laderas {
+  w: number; h: number; f: number;
+  p0: Uint8Array; p1: Uint8Array; p2: Uint8Array;
+  /** 0 sin dato, 1 muy baja … 5 muy alta (de p0) */
+  clase: Uint8Array;
+  /** 1 = dentro de una zona de peligro por deslizamiento del atlas estatal (de p2) */
+  zona: Uint8Array;
+  clases: string[];
+  /** km² de Hidalgo por clase (muy baja … muy alta) */
+  km2: number[];
+  /** CHIRPS a 0.05° (centros de celda desde lon0, lat0 + medio paso): promedio del máximo anual de lluvia en 5 días,
+   *  su valor de 10 años y la lluvia anual, en mm (null = sin dato) */
+  lluvia: { lon0: number; lat0: number; step: number; cols: number; rows: number; anios: [number, number]; rx5: (number | null)[]; rx10: (number | null)[]; anual: (number | null)[] };
+  /** atlas estatal de Hidalgo en el CENAPRED: deslizamientos registrados en 2008 y 2009 */
+  historicos: { fecha: string; lon: number; lat: number; nivel: string; roca: string; tipo: string; nota: string }[];
+  /** deslizamientos del catálogo global de la NASA (precisión de kilómetros) */
+  eventos: { fecha: string; lugar: string; lon: number; lat: number; precision: string; muertes: number }[];
+  /** zonas de peligro por deslizamiento del atlas estatal (anillos lon/lat) */
+  zonas: [number, number][][];
+}
+
 export const GRADOS = ['Sin dato', 'Muy bajo', 'Bajo', 'Medio', 'Alto', 'Muy alto'];
 
 /** Lector de los .bin del proyecto: arreglos alineados a 4 bytes y textos separados por \n. */
@@ -106,6 +152,27 @@ export function decodeLugares(buf: Uint8Array): Lugares {
   };
 }
 
+export function decodePendiente(buf: Uint8Array): Pendiente {
+  const r = new BinReader(buf);
+  r.magic(0x31544852, 'pendiente.bin');
+  const w = r.u32(), h = r.u32();
+  return { w, h, mean: r.arr(Uint8Array, w * h), p15: r.arr(Uint8Array, w * h), p30: r.arr(Uint8Array, w * h) };
+}
+
+export function decodeRiosNombres(buf: Uint8Array): RiosNombres {
+  const r = new BinReader(buf);
+  r.magic(0x31524852, 'rios-nombres.bin');
+  const n = r.u32();
+  return { n, cell: r.arr(Uint32Array, n), rio: r.arr(Uint16Array, n), nombres: r.str() };
+}
+
+export function decodeUsoSuelo(buf: Uint8Array, clases: UsoSuelo['clases'], meta: Meta): UsoSuelo {
+  const r = new BinReader(buf);
+  r.magic(0x31555248, 'uso de suelo');
+  const w = r.u32(), h = r.u32();
+  return { w, h, f: Math.round(w / (meta.W - 1)), clase: r.arr(Uint8Array, w * h), clases };
+}
+
 export function decodeServicios(buf: Uint8Array): Servicios {
   const r = new BinReader(buf);
   r.magic(0x31534852, 'servicios.bin');
@@ -135,6 +202,31 @@ export function createDatasets(resolve: ResolveUrl, meta: Meta, terrain?: () => 
     servicios: () => once('servicios', async () => decodeServicios(await fetchBin(resolve('capas/servicios.bin', new URL('../data/capas/servicios.bin', import.meta.url).href)))),
     /** localidades del catálogo de INEGI fuera del ITER y colonias del DENUE (para el buscador) */
     lugares: () => once('lugares', async () => decodeLugares(await fetchBin(resolve('capas/lugares.bin', new URL('../data/capas/lugares.bin', import.meta.url).href)))),
+    /** uso del suelo y vegetación de INEGI, Serie VII (el del mapa base), por clases a ≈ 65 m */
+    usv: () => once('usv', async () => decodeUsoSuelo(
+      await fetchBin(resolve('capas/usv.bin', new URL('../data/capas/usv.bin', import.meta.url).href)),
+      (await json<{ clases: UsoSuelo['clases'] }>(resolve('capas/usv.json', new URL('../data/capas/usv.json', import.meta.url).href))).clases, meta)),
+    /** Serie VI (la anterior), en la misma rejilla y con su propia lista de clases */
+    usv6: () => once('usv6', async () => decodeUsoSuelo(
+      await fetchBin(resolve('capas/usv6.bin', new URL('../data/capas/usv6.bin', import.meta.url).href)),
+      (await json<{ clases: UsoSuelo['clases'] }>(resolve('capas/usv6.json', new URL('../data/capas/usv6.json', import.meta.url).href))).clases, meta)),
+    /** susceptibilidad de laderas (pendiente a 30 m, lluvia intensa, roca y cobertura) y el atlas estatal del CENAPRED */
+    laderas: () => once('laderas', async () => {
+      const [bin, info] = await Promise.all([
+        fetchBin(resolve('capas/laderas.bin', new URL('../data/capas/laderas.bin', import.meta.url).href)),
+        json<Omit<Laderas, 'w' | 'h' | 'f' | 'p0' | 'p1' | 'p2' | 'clase' | 'zona'>>(resolve('capas/laderas.json', new URL('../data/capas/laderas.json', import.meta.url).href)),
+      ]);
+      const r = new BinReader(bin);
+      r.magic(0x314b4852, 'laderas.bin');
+      const w = r.u32(), h = r.u32(), planes = r.u32();
+      if (planes !== 3) throw new Error('laderas.bin: se esperaban 3 planos');
+      const p0 = r.arr(Uint8Array, w * h), p1 = r.arr(Uint8Array, w * h), p2 = r.arr(Uint8Array, w * h);
+      return { ...info, w, h, f: Math.round(w / (meta.W - 1)), p0, p1, p2, clase: p0.map(v => v & 7), zona: p2.map(v => (v >> 3) & 1) } as Laderas;
+    }),
+    /** pendiente a 30 m resumida por nodo del visor (media, % > 15° y > 30°) */
+    pendiente: () => once('pendiente', async () => decodePendiente(await fetchBin(resolve('capas/pendiente.bin', new URL('../data/capas/pendiente.bin', import.meta.url).href)))),
+    /** nombres de los ríos de OSM sobre el cauce calculado a 90 m (ríos de una cuenca, camino del agua) */
+    riosNombres: () => once('riosNombres', async () => decodeRiosNombres(await fetchBin(resolve('capas/rios-nombres.bin', new URL('../data/capas/rios-nombres.bin', import.meta.url).href)))),
     /** worker de rutas (red vial): se crea al primer uso y lo comparten Accesibilidad y Localidades */
     router: () => (router ??= createRouter(resolve('capas/vias.bin', new URL('../data/capas/vias.bin', import.meta.url).href), meta)),
     /** relieve a la mejor resolución (30 m donde hay teselas, si no 90 m): elevación, perfil, pendiente, flujo, cuencas */

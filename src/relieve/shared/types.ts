@@ -90,7 +90,7 @@ export type WorkerMessage =
 /** Paquete de teselas abierto por el worker de relieve (ver worker/pack.ts). */
 export interface TilePackInfo { kind: number; tileCells: number; nx: number; ny: number; px: number; f: number; has: Uint8Array }
 
-export type TerrainOp = 'elevation' | 'profile' | 'grid' | 'watershed' | 'flowpath';
+export type TerrainOp = 'elevation' | 'profile' | 'grid' | 'watershed' | 'flowpath' | 'flood';
 
 /** Mensajes al worker de relieve (worker/terrain.worker.ts). */
 export type TerrainRequest =

@@ -1,7 +1,7 @@
 import { makeGeo, type Geo } from '../shared/geo';
 import {
-  downstreamPath, flowAccumulation, hornNormals, slopeGrid, snapToStream, upstreamMask,
-  type FlowPath, type GridKind, type Profile, type TerrainGrid, type Watershed,
+  D8, downstreamPath, floodLevels, flowAccumulation, hornNormals, longestFlowPath, maskOutline, slopeGrid, snapToStream, upstreamMask,
+  type Flood, type FlowPath, type GridKind, type Profile, type TerrainGrid, type Watershed,
 } from '../shared/terrain';
 import type { DetailResult, GridMeta, TerrainMessage, TerrainRequest } from '../shared/types';
 import { decodeDetail, decodeElev, fetchBin } from './decode';
@@ -212,7 +212,7 @@ async function gridQuery(kind: GridKind, bounds: number[], res: number): Promise
 }
 
 async function watershed(lon: number, lat: number, snapM = 300): Promise<Watershed> {
-  const { w, h, f, dir } = await flowDirs(), a = await accumulation();
+  const { w, h, f, dir } = await flowDirs(), a = await accumulation(), d = await detail();
   const c = Math.round(colOf(lon) * f), r = Math.round(rowOf(lat) * f);
   if (c < 0 || r < 0 || c >= w || r >= h) throw new Error('El punto queda fuera del mapa');
   const cellM = (grid.step / f) * geo.KX * 1000;
@@ -222,12 +222,33 @@ async function watershed(lon: number, lat: number, snapM = 300): Promise<Watersh
   for (let k = 0; k < w * h; k++) if (mask[k]) { const rr = (k / w) | 0, cc = k - rr * w; c0 = Math.min(c0, cc); c1 = Math.max(c1, cc); r0 = Math.min(r0, rr); r1 = Math.max(r1, rr); }
   const gw = c1 - c0 + 1, gh = r1 - r0 + 1, data = new Uint8Array(gw * gh);
   for (let rr = 0; rr < gh; rr++) for (let cc = 0; cc < gw; cc++) data[rr * gw + cc] = mask[(rr + r0) * w + cc + c0];
-  const cellKm2 = ((grid.step / f) * geo.KX) * ((grid.step / f) * geo.KZ);
+  const kx = (grid.step / f) * geo.KX, kz = (grid.step / f) * geo.KZ;
+  // contorno en lon/lat (el de la máscara recortada, desplazado a la rejilla entera)
+  const rings = maskOutline(data, gw, gh), nv = rings.reduce((s, g) => s + g.length, 0);
+  const outline = { lon: new Float32Array(nv), lat: new Float32Array(nv), start: new Uint32Array(rings.length), len: new Uint32Array(rings.length) };
+  let o = 0;
+  rings.forEach((g, k) => {
+    outline.start[k] = o; outline.len[k] = g.length;
+    for (const [x, y] of g) { outline.lon[o] = lonOf((c0 + x) / f); outline.lat[o] = latOf((r0 + y) / f); o++; }
+  });
+  const main = longestFlowPath(dir, w, h, i, kx, kz);
+  // altitudes con el relieve de 90 m (misma rejilla que el flujo)
+  let zmin = Infinity, zmax = -Infinity, zsum = 0, zn = 0;
+  if (d.w === w && d.h === h) for (let rr = r0; rr <= r1; rr++) for (let cc = c0; cc <= c1; cc++) {
+    const k = rr * w + cc, z = d.z[k];
+    if (!mask[k] || !(z > 0)) continue;
+    if (z < zmin) zmin = z;
+    if (z > zmax) zmax = z;
+    zsum += z; zn++;
+  }
   return {
     grid: { width: gw, height: gh, bounds: boundsOf(c0, c1, r0, r1, f), res: Math.round(cellM), data },
-    areaKm2: cells * cellKm2,
+    areaKm2: cells * kx * kz,
     outlet: [lonOf((i % w) / f), latOf(Math.floor(i / w) / f)],
     truncated: edge,
+    outline,
+    mainChannel: { lon: Float32Array.from(main.path, j => lonOf((j % w) / f)), lat: Float32Array.from(main.path, j => latOf(Math.floor(j / w) / f)), km: main.km },
+    elev: zn ? { min: zmin, max: zmax, mean: zsum / zn } : { min: NaN, max: NaN, mean: NaN },
   };
 }
 
@@ -244,6 +265,120 @@ async function flowPath(lon: number, lat: number, maxKm = 500): Promise<FlowPath
     if (k) km += Math.hypot((lo[k] - lo[k - 1]) * geo.KX, (la[k] - la[k - 1]) * geo.KZ);
   });
   return { lon: lo, lat: la, km };
+}
+
+/**
+ * Inundación ilustrativa sobre el relieve de 30 m de una ventana alrededor del punto (ver Flood): «río» con la altura
+ * sobre el tramo de cauce elegido, «valle» con un relleno por prioridad desde el punto.
+ */
+async function flood(lon: number, lat: number, mode: 'rio' | 'valle' = 'rio', radiusKm = 20, maxRise = 30): Promise<Flood> {
+  const R = Math.min(30, Math.max(2, radiusKm)), rise = Math.min(60, Math.max(1, maxRise));
+  const g = await gridQuery('elevacion', [lon - R / geo.KX, lat - R / geo.KZ, lon + R / geo.KX, lat + R / geo.KZ], 30);
+  const { width: w, height: h } = g, z = g.data as Float32Array, [W0, S0, E0, N0] = g.bounds, dx = (E0 - W0) / w, dy = (N0 - S0) / h;
+  const need = new Float32Array(w * h).fill(NaN), ground = new Float32Array(w * h).fill(NaN);
+  let seedLon: number, seedLat: number, seedZ: number, edgeRise = NaN;
+
+  if (mode === 'valle') {
+    // el punto baja al lugar más bajo a ≤ 150 m: un clic junto al agua empieza en el fondo
+    const cx = Math.floor((lon - W0) / dx), cy = Math.floor((N0 - lat) / dy), rad = Math.max(1, Math.round(150 / g.res));
+    let seed = -1;
+    for (let r = Math.max(0, cy - rad); r <= Math.min(h - 1, cy + rad); r++) for (let c = Math.max(0, cx - rad); c <= Math.min(w - 1, cx + rad); c++) {
+      if ((r - cy) ** 2 + (c - cx) ** 2 > rad * rad) continue;
+      const i = r * w + c;
+      if (z[i] > 0 && (seed < 0 || z[i] < z[seed])) seed = i;
+    }
+    if (seed < 0) throw new Error('El punto queda fuera del relieve');
+    const f = floodLevels(z, w, h, seed, rise), base = z[seed];
+    for (let i = 0; i < w * h; i++) if (f.level[i] >= base) { need[i] = f.level[i] - base; ground[i] = z[i] - base; }
+    seedLon = W0 + ((seed % w) + 0.5) * dx; seedLat = N0 - (Math.floor(seed / w) + 0.5) * dy; seedZ = base;
+    edgeRise = f.edgeLevel - base;
+  } else {
+    // tramo de río: desde el cauce más cercano al clic (flujo de 90 m), río abajo y río arriba por el brazo principal
+    // (el de más área drenada) mientras siga dentro de la ventana y con al menos 10 % del área del punto
+    const { w: fw, h: fh, f, dir } = await flowDirs(), a = await accumulation();
+    const cellM = (grid.step / f) * geo.KX * 1000;
+    const s = snapToStream(a, fw, fh, Math.round(rowOf(lat) * f) * fw + Math.round(colOf(lon) * f), Math.round(300 / cellM));
+    const gc0 = Math.ceil(colOf(W0) * f), gc1 = Math.floor(colOf(E0) * f), gr0 = Math.ceil(rowOf(N0) * f), gr1 = Math.floor(rowOf(S0) * f);
+    const ww = gc1 - gc0 + 1, wh = gr1 - gr0 + 1, local = (i: number) => {
+      const rr = ((i / fw) | 0) - gr0, cc = (i % fw) - gc0;
+      return rr >= 0 && cc >= 0 && rr < wh && cc < ww ? rr * ww + cc : -1;
+    };
+    // nodo de 30 m de la ventana que coincide con cada nodo de 90 m (factor 9 / 3 = 3)
+    const n30c0 = Math.round(((W0 - grid.lon0) / grid.step) * 9 + 0.5), n30r0 = Math.round(((grid.lat0 - N0) / grid.step) * 9 + 0.5);
+    const zAt90 = (i: number) => {
+      // fondo del cauce: el más bajo de los nodos de 30 m dentro de la celda de 90 m
+      const r9 = ((i / fw) | 0) * 3 - n30r0, c9 = (i % fw) * 3 - n30c0;
+      let m = Infinity;
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        const rr = r9 + dr, cc = c9 + dc;
+        if (rr >= 0 && cc >= 0 && rr < h && cc < w && z[rr * w + cc] > 0) m = Math.min(m, z[rr * w + cc]);
+      }
+      return m;
+    };
+    const reachZ = new Float32Array(ww * wh).fill(NaN);
+    for (let i = s, k = 0; k < 4000 && local(i) >= 0; k++) {
+      reachZ[local(i)] = zAt90(i);
+      const d = dir[i];
+      if (d < 0) break;
+      i = (((i / fw) | 0) + D8[d][0]) * fw + (i % fw) + D8[d][1];
+    }
+    for (let i = s, k = 0; k < 4000; k++) {
+      const r = (i / fw) | 0, c = i % fw;
+      let up = -1;
+      for (let q = 0; q < 8; q++) {
+        const rr = r - D8[q][0], cc = c - D8[q][1], n = rr * fw + cc;
+        if (rr >= 0 && cc >= 0 && rr < fh && cc < fw && dir[n] === q && (up < 0 || a[n] > a[up])) up = n;
+      }
+      if (up < 0 || a[up] < a[s] * 0.1 || local(up) < 0) break;
+      reachZ[local(up)] = zAt90(up);
+      i = up;
+    }
+    // cada celda de 90 m de la ventana → altura del cauce del tramo al que drena (o NaN si drena a otro lado)
+    const drain = new Float32Array(ww * wh), state = new Uint8Array(ww * wh), path: number[] = [];
+    for (let k = 0; k < ww * wh; k++) {
+      if (state[k]) continue;
+      path.length = 0;
+      let i = (gr0 + Math.floor(k / ww)) * fw + gc0 + (k % ww), v = NaN;
+      for (;;) {
+        const L = local(i);
+        if (L < 0) break;
+        if (state[L]) { v = drain[L]; break; }
+        if (!Number.isNaN(reachZ[L])) { v = reachZ[L]; state[L] = 1; drain[L] = v; break; }
+        state[L] = 2; path.push(L);
+        const d = dir[i];
+        if (d < 0) break;
+        i = (((i / fw) | 0) + D8[d][0]) * fw + (i % fw) + D8[d][1];
+      }
+      for (const L of path) { drain[L] = v; state[L] = 1; }
+    }
+    for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) {
+      const i = r * w + c;
+      if (!(z[i] > 0)) continue;
+      const L = local(Math.round((r + n30r0) / 3) * fw + Math.round((c + n30c0) / 3)), zr = L >= 0 ? drain[L] : NaN;
+      if (!(zr > 0)) continue;
+      const hand = Math.max(0, z[i] - zr);
+      if (hand <= rise) { need[i] = hand; ground[i] = hand; }
+    }
+    seedLon = lonOf((s % fw) / f); seedLat = latOf(Math.floor(s / fw) / f); seedZ = zAt90(s);
+  }
+  // se devuelve solo el rectángulo que alcanza el agua (más una celda), no la ventana entera
+  let r0 = h, r1 = -1, c0 = w, c1 = -1;
+  for (let i = 0; i < w * h; i++) if (!Number.isNaN(need[i])) { const r = (i / w) | 0, c = i - r * w; if (r < r0) r0 = r; if (r > r1) r1 = r; if (c < c0) c0 = c; if (c > c1) c1 = c; }
+  if (r1 < 0) throw new Error('No hay terreno inundable alrededor del punto');
+  const a0 = Math.max(0, r0 - 1), a1 = Math.min(h - 1, r1 + 1), b0 = Math.max(0, c0 - 1), b1 = Math.min(w - 1, c1 + 1);
+  const cw = b1 - b0 + 1, ch = a1 - a0 + 1, needC = new Float32Array(cw * ch), groundC = new Float32Array(cw * ch);
+  for (let r = 0; r < ch; r++) {
+    needC.set(need.subarray((r + a0) * w + b0, (r + a0) * w + b1 + 1), r * cw);
+    groundC.set(ground.subarray((r + a0) * w + b0, (r + a0) * w + b1 + 1), r * cw);
+  }
+  return {
+    mode,
+    need: { width: cw, height: ch, bounds: [W0 + b0 * dx, N0 - (a1 + 1) * dy, W0 + (b1 + 1) * dx, N0 - a0 * dy], res: g.res, data: needC },
+    ground: groundC,
+    seed: [seedLon, seedLat, seedZ],
+    edgeRise,
+    maxRise: rise,
+  };
 }
 
 /** Arreglos tipados del resultado (se transfieren en vez de copiarse). */
@@ -283,6 +418,7 @@ ctx.onmessage = async ({ data: m }) => {
         : m.op === 'profile' ? await profile(a.lon, a.lat, a.step)
         : m.op === 'grid' ? await gridQuery(a.kind, a.bounds, a.res ?? 90)
         : m.op === 'watershed' ? await watershed(a.lon, a.lat, a.snapM)
+        : m.op === 'flood' ? await flood(a.lon, a.lat, a.mode, a.radiusKm, a.maxRise)
         : await flowPath(a.lon, a.lat, a.maxKm);
       ctx.postMessage({ type: 'result', id: m.id, value }, buffersOf(value));
     }

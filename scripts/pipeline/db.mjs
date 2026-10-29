@@ -92,18 +92,34 @@ if (exists('lugares.json')) {
 /* uso de suelo */
 await db.query(`create table relieve.uso_suelo_grupos (id text primary key, nombre text, color text)`);
 await insert('uso_suelo_grupos', ['id', 'nombre', 'color'], USV_GROUPS);
-await db.query(`create table relieve.uso_suelo (id serial primary key, clave text, descripcion text, grupo text references relieve.uso_suelo_grupos(id), secundaria boolean, geom jsonb)`);
-await db.query(`comment on table relieve.uso_suelo is 'Polígonos INEGI Serie VII 1:250 000 que tocan Hidalgo (geom en GeoJSON, WGS84)'`);
-await insert('uso_suelo', ['clave', 'descripcion', 'grupo', 'secundaria', 'geom'], readJSON(path.join(OUT, 'usv_poligonos.json')).map(p => {
-  const g = usvGroupOf(p.clave);
-  return { clave: p.clave, descripcion: p.descripcion, grupo: USV_GROUPS[g.group].id, secundaria: g.secondary, geom: JSON.stringify(p.geom) };
-}), 200);
+await db.query(`create table relieve.uso_suelo (id serial primary key, serie smallint, clave text, descripcion text, grupo text references relieve.uso_suelo_grupos(id), secundaria boolean, geom jsonb)`);
+await db.query(`comment on table relieve.uso_suelo is 'Polígonos INEGI 1:250 000 que tocan Hidalgo: serie 7 (Serie VII, mapa base) y 6 (Serie VI, cambio de uso de suelo); geom en GeoJSON, WGS84'`);
+for (const [serie, file] of [[7, 'usv_poligonos.json'], [6, 'usv6_poligonos.json']]) {
+  if (!exists(file)) continue;
+  await insert('uso_suelo', ['serie', 'clave', 'descripcion', 'grupo', 'secundaria', 'geom'], readJSON(path.join(OUT, file)).map(p => {
+    const g = usvGroupOf(p.clave);
+    return { serie, clave: p.clave, descripcion: p.descripcion, grupo: USV_GROUPS[g.group].id, secundaria: g.secondary, geom: JSON.stringify(p.geom) };
+  }), 200);
+}
+await db.query(`create index on relieve.uso_suelo (serie, grupo)`);
 
 /* ríos (drenaje calculado a 90 m) */
 if (exists('rios.json')) {
   await db.query(`create table relieve.rios (id serial primary key, orden smallint, area_km2 real, km real, geom jsonb)`);
   await db.query(`comment on table relieve.rios is 'Red de drenaje calculada del relieve a 90 m y guiada por los ríos de OpenStreetMap: tramos entre confluencias con orden de Strahler y área drenada al final del tramo. geom: GeoJSON LineString (WGS84)'`);
   await insert('rios', ['orden', 'area_km2', 'km', 'geom'], readJSON(path.join(OUT, 'rios.json')).map(r => ({ ...r, geom: JSON.stringify({ type: 'LineString', coordinates: r.geom }) })), 500);
+}
+
+/* laderas: deslizamientos registrados y susceptibilidad por municipio (índice propio) */
+if (exists('deslizamientos.json')) {
+  await db.query(`create table relieve.deslizamientos (id serial primary key, fuente text, fecha date, lon double precision, lat double precision, cve_mun smallint, nivel_atlas text, litologia text, descripcion text, clase_indice smallint, en_zona_atlas boolean, precision text, muertes integer)`);
+  await db.query(`comment on table relieve.deslizamientos is 'Deslizamientos registrados en Hidalgo: atlas estatal en el Atlas Nacional de Riesgos del CENAPRED (2008–2009) y catálogo global de la NASA (precisión de kilómetros). clase_indice: índice propio de susceptibilidad en el lugar (1 muy baja … 5 muy alta); en_zona_atlas: dentro de una zona de peligro del atlas estatal'`);
+  await insert('deslizamientos', ['fuente', 'fecha', 'lon', 'lat', 'cve_mun', 'nivel_atlas', 'litologia', 'descripcion', 'clase_indice', 'en_zona_atlas', 'precision', 'muertes'], readJSON(path.join(OUT, 'deslizamientos.json')).map(d => ({ ...d, fecha: /^\d{4}-\d{2}-\d{2}$/.test(d.fecha) ? d.fecha : null })));
+}
+if (exists('laderas_municipios.json')) {
+  await db.query(`create table relieve.laderas_municipios (cve_mun smallint primary key, muy_baja_km2 real, baja_km2 real, media_km2 real, alta_km2 real, muy_alta_km2 real, zona_atlas_km2 real)`);
+  await db.query(`comment on table relieve.laderas_municipios is 'Índice propio de susceptibilidad de laderas (pendiente a 30 m, lluvia intensa de CHIRPS, roca de INEGI y cobertura de la Serie VII) a 90 m: km² por clase y km² en zonas de peligro del atlas estatal (CENAPRED)'`);
+  await insert('laderas_municipios', ['cve_mun', 'muy_baja_km2', 'baja_km2', 'media_km2', 'alta_km2', 'muy_alta_km2', 'zona_atlas_km2'], readJSON(path.join(OUT, 'laderas_municipios.json')));
 }
 
 /* red vial */

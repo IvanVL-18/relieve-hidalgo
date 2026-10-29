@@ -8,6 +8,8 @@ export const MARG_RAMP = ['#6e3170', '#923b8f', '#b44dab', '#d266c4', '#ee90db']
 export const TIME_RAMP = ['#fde0c2', '#f9b98a', '#f28c5a', '#df6236', '#bd4124', '#93291a'];
 export const TIME_BREAKS = [15, 30, 60, 90, 120];
 export const TIME_LABELS = ['< 15 min', '15–30', '30–60', '1–1.5 h', '1.5–2 h', '> 2 h'];
+/** profundidad del agua: claro = poca, oscuro = mucha (sobre el terreno, no sobre el panel) */
+export const DEPTH_RAMP = ['#cfeafc', '#86c5f0', '#4597dc', '#2266b8', '#163f80'];
 
 /**
  * Matriz bivariada 3 × 3 (Stevens): columnas = pendiente (baja → alta, hacia cian),

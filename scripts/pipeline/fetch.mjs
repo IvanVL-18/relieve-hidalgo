@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 /**
  * Descarga las fuentes públicas a data-src/cache/ (se omiten las que ya están; --force para renovar).
- *   node scripts/pipeline/fetch.mjs [relieve agua iter denue catalogo conapo clues usv vias satelite]
+ *   node scripts/pipeline/fetch.mjs [relieve agua iter denue catalogo conapo clues usv usv6 lluvia rocas deslizamientos chirps cenapred vias
+ *                                    satelite]
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { CACHE, H, LAT0, LON0, ROOT, STEP, W, download, log } from './lib.mjs';
 import { BBOX, SOURCES, tileRange } from './sources.mjs';
+import { readTiffRows } from './tiff.mjs';
 
 const force = process.argv.includes('--force');
 const only = process.argv.slice(2).filter(a => !a.startsWith('--'));
@@ -97,9 +99,55 @@ async function fetchTiles(src, z, ext, keep = () => true) {
   await Promise.all([worker(), worker(), worker(), worker()]);
 }
 
+/**
+ * Pentadas de CHIRPS: la ventana de la rejilla de 0.05° que cubre el rectángulo del mapa (con un píxel de margen), un
+ * archivo por año con 72 × renglones × columnas float32 (mm en 5 días; −9999 sin dato) y ventana.json. El servidor
+ * tarda 1–4 s en responder cada petición: 8 archivos a la vez; si se corta, sigue desde el último año completo.
+ */
+async function fetchChirps() {
+  const src = SOURCES.chirps, dir = path.join(CACHE, src.file), STEP = 0.05, LON = -120, LAT = 35;
+  const r0 = Math.floor((LAT - BBOX.n) / STEP) - 1, r1 = Math.floor((LAT - BBOX.s) / STEP) + 1;
+  const c0 = Math.floor((BBOX.w - LON) / STEP) - 1, c1 = Math.floor((BBOX.e - LON) / STEP) + 1, rows = r1 - r0 + 1, cols = c1 - c0 + 1;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'ventana.json'), JSON.stringify({ lon0: LON + c0 * STEP, lat0: LAT - r0 * STEP, step: STEP, cols, rows, pentadas: 72 }));
+  for (let y = src.anios[0]; y <= src.anios[1]; y++) {
+    const file = path.join(dir, `${y}.f32`);
+    if (!force && fs.existsSync(file)) continue;
+    const out = new Float32Array(72 * rows * cols), jobs = Array.from({ length: 72 }, (_, k) => k), t0 = Date.now();
+    const worker = async () => {
+      for (let k; (k = jobs.shift()) !== undefined; ) {
+        const url = src.url.replace('{y}', y).replace('{m}', String(Math.floor(k / 6) + 1).padStart(2, '0')).replace('{p}', (k % 6) + 1);
+        const t = await readTiffRows(url, r0, r1);
+        if (Math.abs(t.origin[0] - LON) > 1e-6 || Math.abs(t.origin[1] - LAT) > 1e-6 || Math.abs(t.step - STEP) > 1e-6) throw new Error(`${url}: otra rejilla`);
+        t.rows.forEach((row, r) => out.set(row.subarray(c0, c1 + 1), (k * rows + r) * cols));
+      }
+    };
+    try { await Promise.all(Array.from({ length: 8 }, worker)); } catch (e) {
+      // un año incompleto no se guarda; build-laderas usa los años que haya (al menos 30)
+      log(`  chirps ${y}: falló (${e.message.slice(0, 120)}); vuelve a correr data:fetch -- chirps para completarlo`);
+      jobs.length = 0;
+      continue;
+    }
+    fs.writeFileSync(file + '.part', Buffer.from(out.buffer));
+    fs.renameSync(file + '.part', file);
+    log(`  chirps ${y}: 72 pentadas (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+  }
+}
+
+/** CENAPRED (ArcGIS 10.2): capas vectoriales del atlas de Hidalgo con query (JSON de Esri, coordenadas geográficas). */
+async function fetchCenapred() {
+  const src = SOURCES.cenapred, q = '/query?where=1%3D1&outFields=*&outSR=4326&returnGeometry=true&f=json';
+  for (const capa of [...src.historicos, src.zonas]) {
+    const file = await download(src.url + '/' + capa + q, `${src.file}${capa.split('/').slice(1).join('_')}.json`, { force });
+    const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!Array.isArray(d.features)) { fs.rmSync(file); throw new Error(`CENAPRED ${capa}: respuesta sin elementos`); }
+    log(`  cenapred ${capa}: ${d.features.length} elementos`);
+  }
+}
+
 if (want('relieve')) await fetchTiles(SOURCES.relieve, 12, 'png');
 if (want('agua')) await fetchWater().catch(e => log(`agua: ${e.message}; se usará la copia de data-src/osm_agua.json.gz`));
-for (const k of ['iter', 'denue', 'imm', 'iml', 'clues', 'usv']) {
+for (const k of ['iter', 'denue', 'imm', 'iml', 'clues', 'usv', 'usv6', 'lluvia', 'rocas', 'deslizamientos']) {
   if (!want(k)) continue;
   log(k, '…');
   const f = await download(SOURCES[k].url, SOURCES[k].file, { force });
@@ -118,6 +166,8 @@ if (want('satelite')) {
   await fetchTiles(SOURCES.satelite, 12, 'jpg');
   await fetchTiles(SOURCES.satelite, 13, 'jpg', nearHidalgo(13));
 }
+if (want('cenapred')) await fetchCenapred();
+if (want('chirps')) await fetchChirps();
 if (want('vias')) await fetchRoads();
 // fecha de descarga de cada fuente: la del archivo en la caché (no la de esta corrida, que puede no haber bajado nada)
 const fetchedOn = s => { const f = path.join(CACHE, s.file.replace('{mun}', '001')); return fs.existsSync(f) ? fs.statSync(f).mtime.toISOString().slice(0, 10) : null; };

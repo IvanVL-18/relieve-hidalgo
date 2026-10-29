@@ -16,6 +16,38 @@ export const SOURCES = {
     url: `https://idefor.cnf.gob.mx/geoserver/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=geonode:cdv_usuev250svii_cnal_wgs84&outputFormat=application/json&bbox=${BBOX.w},${BBOX.s},${BBOX.e},${BBOX.n},EPSG:4326`,
     file: 'usv/usv250s7_hidalgo.geojson', fuente: 'INEGI, Uso del suelo y vegetación 1:250 000 Serie VII (vía IDEFOR, CONAFOR)', licencia: 'Términos de libre uso de la información del INEGI',
   },
+  // serie anterior para el análisis de cambio de uso de suelo (misma leyenda de claves que la Serie VII)
+  usv6: {
+    url: `https://idefor.cnf.gob.mx/geoserver/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=geonode:usv250s6_lcc_atributos_mgm_geo&outputFormat=application/json&bbox=${BBOX.w},${BBOX.s},${BBOX.e},${BBOX.n},EPSG:4326`,
+    file: 'usv/usv250s6_hidalgo.geojson', fuente: 'INEGI, Uso del suelo y vegetación 1:250 000 Serie VI (vía IDEFOR, CONAFOR)', licencia: 'Términos de libre uso de la información del INEGI',
+  },
+  // rangos de precipitación media anual (INEGI, 1910–2009), publicados por CONAFOR para la Megalópolis (cubre Hidalgo)
+  lluvia: {
+    url: `https://idefor.cnf.gob.mx/geoserver/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=geonode:precipitacion&outputFormat=application/json&bbox=${BBOX.w},${BBOX.s},${BBOX.e},${BBOX.n},EPSG:4326`,
+    file: 'inegi/precipitacion_hidalgo.geojson', fuente: 'INEGI, precipitación media anual 1910–2009 (vía IDEFOR, CONAFOR: Megalópolis 2021)', licencia: 'Términos de libre uso de la información del INEGI',
+  },
+  // tipo de roca (INEGI, geología serie I 1:250 000), publicado por CONAFOR para la Megalópolis (cubre Hidalgo)
+  rocas: {
+    url: `https://idefor.cnf.gob.mx/geoserver/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=geonode:rocas_mega_ent&outputFormat=application/json&bbox=${BBOX.w},${BBOX.s},${BBOX.e},${BBOX.n},EPSG:4326`,
+    file: 'inegi/rocas_hidalgo.geojson', fuente: 'INEGI, conjunto de datos geológicos 1:250 000 serie I (vía IDEFOR, CONAFOR: tipo de roca en la Megalópolis 2021)', licencia: 'Términos de libre uso de la información del INEGI',
+  },
+  // lluvia por pentada (5 días) de CHIRPS v3, 1981–2025: de cada archivo de Latinoamérica se lee por rangos solo la
+  // franja de Hidalgo ({y} año, {m} mes, {p} pentada 1–6); se guarda un archivo por año
+  chirps: {
+    url: 'https://data.chc.ucsb.edu/products/CHIRPS/v3.0/pentads/latam/tifs/chirps-v3.0.{y}.{m}.{p}.tif', file: 'chirps/pentadas/', anios: [1981, 2025],
+    fuente: 'Climate Hazards Center (UCSB), CHIRPS v3.0, pentadas a 0.05° (Funk et al.; CHIRPS3 Data Repository, doi:10.15780/G2JQ0P)', licencia: 'Dominio público',
+  },
+  // CENAPRED, servicio ArcGIS del Atlas Nacional de Riesgos: del atlas estatal de Hidalgo, los deslizamientos
+  // registrados (2008 y 2009) y las zonas de peligro por deslizamiento. (Su Mapa Nacional de Susceptibilidad por
+  // Inestabilidad de Laderas solo se publica, en Situacionales/Laderas_Fernand, para Tamaulipas, Nuevo León, San Luis
+  // Potosí y Veracruz: no cubre Hidalgo.)
+  cenapred: {
+    url: 'http://servicios2.cenapred.unam.mx:6080/arcgis/rest/services', file: 'cenapred/',
+    historicos: ['AtlasEstatales/MapaHidalgo/MapServer/141', 'AtlasEstatales/MapaHidalgo/MapServer/142'], zonas: 'AtlasEstatales/MapaHidalgo/MapServer/139',
+    fuente: 'CENAPRED, Atlas Nacional de Riesgos: Atlas Estatal de Hidalgo, inestabilidad de laderas (deslizamientos registrados en 2008 y 2009 y zonificación)', licencia: 'Información pública del Gobierno de México (citar al CENAPRED)',
+  },
+  // deslizamientos registrados (precisión de kilómetros): referencia para el análisis de laderas
+  deslizamientos: { url: 'https://data.nasa.gov/docs/legacy/Global_Landslide_Catalog_Export/Global_Landslide_Catalog_Export_rows.csv', file: 'nasa/glc.csv', fuente: 'NASA, Global Landslide Catalog (Kirschbaum et al.)', licencia: 'Datos abiertos de la NASA' },
   vias: { url: 'overpass', file: 'osm/vias_hidalgo.json', fuente: 'OpenStreetMap (Overpass API)', licencia: 'ODbL 1.0 © colaboradores de OpenStreetMap' },
   agua: { url: 'overpass', file: 'osm/agua_hidalgo.json', fuente: 'OpenStreetMap (Overpass API): ríos, presas y lagos', licencia: 'ODbL 1.0 © colaboradores de OpenStreetMap' },
   relieve: {
