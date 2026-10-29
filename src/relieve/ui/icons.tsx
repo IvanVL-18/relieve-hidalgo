@@ -18,4 +18,8 @@ export const IconCompass = () => (
     <path className="rh-s" d="M12 21l-3.2-9h6.4z" />
   </svg>
 );
+export const IconPlay = () => <svg {...S}><path d="M8 5.5v13l10.5-6.5z" /></svg>;
+export const IconPause = () => <svg {...S}><path d="M8.5 5.5v13M15.5 5.5v13" /></svg>;
+/** flecha hacia arriba (se gira con CSS para marcar hacia dónde va el viento) */
+export const IconArrow = () => <svg {...S}><path d="M12 19V5M6.5 10.5L12 5l5.5 5.5" /></svg>;
 export const IconGrid = () => <svg {...S}><rect x="4" y="4" width="6.5" height="6.5" rx="1.5" /><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5" /><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5" /><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5" /></svg>;

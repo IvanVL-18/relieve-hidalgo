@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { RelieveHidalgo, type BaseMapId, type MunicipioInfo, type ReadyInfo, type RelieveApi } from './relieve';
+import { RelieveHidalgo, type BaseMapId, type CloudKind, type MunicipioInfo, type ReadyInfo, type RelieveApi } from './relieve';
 import type { ReliefEngine } from './relieve/engine/Engine';
 import meta from './relieve/data/meta.json';
 
@@ -14,17 +14,22 @@ const debugHooks = import.meta.env.DEV
 
 /**
  * Pantalla completa, como el artefacto. Parámetros: ?hora=19.5 · ?mapa=satelite|altitud · ?analisis=accesibilidad · ?quieto · ?embed
+ * · ?nubes=auto|cumulos|nublado|niebla|tormenta|no · ?lapso (nubes en movimiento)
  */
 export function App() {
   const qs = new URLSearchParams(location.search);
   if (qs.has('embed')) return <EmbedDemo />;
   const hour = Number(qs.get('hora'));
+  const nubes = qs.get('nubes');
+  const kind = (['auto', 'cumulos', 'nublado', 'niebla', 'tormenta'] as CloudKind[]).find(k => k === nubes);
   return (
     <RelieveHidalgo
       style={{ position: 'fixed', inset: 0, height: 'auto' }}
       initialHour={hour >= 5 && hour <= 20.5 ? hour : undefined}
       initialBaseMap={(['usodesuelo', 'satelite', 'altitud'] as BaseMapId[]).find(b => b === qs.get('mapa'))}
       initialAnalysis={qs.get('analisis')}
+      initialLayers={nubes === 'no' ? { clouds: false } : undefined}
+      initialClouds={{ ...(kind ? { kind } : {}), ...(qs.has('lapso') ? { play: true } : {}) }}
       autoRotate={!qs.has('quieto')}
       {...debugHooks}
     />

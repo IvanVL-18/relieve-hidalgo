@@ -10,11 +10,14 @@ import { useCallback, useEffect, useImperativeHandle, useRef, useState, type CSS
 import type { Datasets } from './analyses/datasets';
 import { ANALYSES } from './analyses/registry';
 import type { LayerKey, Layers, LoadStage, MunicipioInfo, ReadyInfo, ReliefEngine } from './engine/Engine';
+import { CLOUD_DEFAULTS, CLOUD_KINDS, skyFor, windName, type CloudSettings } from './shared/clouds';
 import type { SearchItem } from './engine/search';
 import { BASE_MAPS, type BaseMapId } from './shared/basemaps';
 import { USV_GROUPS } from './shared/usv';
 import { AnalysisMenu, AnalysisPanel } from './ui/Analyses';
-import { IconCamera, IconChevron, IconClose, IconCompass, IconExpand, IconGrid, IconMinus, IconMoon, IconPlus, IconShrink, IconSun, IconTarget } from './ui/icons';
+import {
+  IconArrow, IconCamera, IconChevron, IconClose, IconCompass, IconExpand, IconGrid, IconMinus, IconMoon, IconPause, IconPlay, IconPlus, IconShrink, IconSun, IconTarget,
+} from './ui/icons';
 import { SearchBox } from './ui/SearchBox';
 import { ALT_STOPS_HEX } from './worker/palette';
 
@@ -38,6 +41,8 @@ export interface RelieveHidalgoProps {
   /** hora local de México, 5–20 */
   initialHour?: number;
   initialLayers?: Partial<Layers>;
+  /** cielo inicial: tipo de nubes (auto = según la hora), cantidad 0–1, viento (grados desde el norte) y lapso de tiempo */
+  initialClouds?: Partial<CloudSettings>;
   /** mapa base: uso de suelo INEGI (por omisión), satélite o tintas por altitud */
   initialBaseMap?: BaseMapId;
   /** análisis abierto al cargar (id del registro, p. ej. «accesibilidad») */
@@ -101,6 +106,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   const [error, setError] = useState('');
   const [info, setInfo] = useState<ReadyInfo | null>(null);
   const [layers, setLayers] = useState<Layers>({ ...DEFAULT_LAYERS, ...props.initialLayers });
+  const [clouds, setClouds] = useState<CloudSettings>({ ...CLOUD_DEFAULTS, ...props.initialClouds });
   const [exag, setExag] = useState(props.initialExaggeration ?? 2.5);
   const [hour, setHour] = useState(props.initialHour ?? 16.5);
   const [baseMap, setBaseMap] = useState<BaseMapId>(props.initialBaseMap ?? 'usodesuelo');
@@ -136,7 +142,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
           {
             dataBaseUrl: props.dataBaseUrl,
             quality: props.quality,
-            exaggeration: exag, hour, layers, baseMap,
+            exaggeration: exag, hour, layers, baseMap, clouds,
             autoRotate: props.autoRotate ?? true,
             cooperativeGestures: props.cooperativeGestures ?? false,
             debug: props.debug,
@@ -201,6 +207,8 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   const eng = () => engineRef.current;
   const ready = stage === 'ready';
   const toggleLayer = (k: LayerKey) => { const on = !layers[k]; setLayers({ ...layers, [k]: on }); eng()?.setLayer(k, on); };
+  const updateClouds = (s: Partial<CloudSettings>) => { setClouds(c => ({ ...c, ...s })); eng()?.setClouds(s); };
+  const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const download = async () => {
     const blob = await eng()?.screenshot();
     if (!blob) return;
@@ -333,6 +341,35 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                       <button key={k} type="button" aria-pressed={layers[k]} onClick={() => toggleLayer(k)}>{t}</button>
                     ))}
                   </div>
+                  {layers.clouds && (
+                    <div className="rh-sky" role="group" aria-label="Nubes">
+                      <div className="rh-seg rh-seg5" role="radiogroup" aria-label="Tipo de cielo">
+                        {CLOUD_KINDS.map(k => (
+                          <button key={k.id} type="button" role="radio" aria-checked={clouds.kind === k.id} title={k.hint} onClick={() => updateClouds({ kind: k.id })}>{k.label}</button>
+                        ))}
+                      </div>
+                      <div className="rh-sky-row">
+                        <div className="rh-ctl">
+                          <div className="rh-head"><label htmlFor="rh-cloud-amt">Cantidad</label><output htmlFor="rh-cloud-amt">{Math.round(clouds.amount * 100)} %</output></div>
+                          <input id="rh-cloud-amt" type="range" min={0} max={1} step={0.01} value={clouds.amount} onChange={e => updateClouds({ amount: +e.target.value })} />
+                        </div>
+                        <div className="rh-ctl">
+                          <div className="rh-head">
+                            <label htmlFor="rh-wind">Viento</label>
+                            <output htmlFor="rh-wind"><span className="rh-wind-arrow" style={{ transform: `rotate(${clouds.wind + 180}deg)` }}><IconArrow /></span>{windName(clouds.wind)}</output>
+                          </div>
+                          <input id="rh-wind" type="range" min={0} max={360} step={5} value={clouds.wind} aria-valuetext={'Viento ' + windName(clouds.wind)} onChange={e => updateClouds({ wind: +e.target.value })} />
+                        </div>
+                        <button type="button" className="rh-sky-play" aria-pressed={clouds.play} disabled={reduceMotion}
+                          aria-label={clouds.play ? 'Detener las nubes' : 'Animar las nubes'}
+                          title={reduceMotion ? 'Sin animación: el sistema pide reducir el movimiento' : clouds.play ? 'Detener las nubes' : 'Lapso de tiempo: las nubes avanzan con el viento, crecen y se deshacen'}
+                          onClick={() => updateClouds({ play: !clouds.play })}>
+                          {clouds.play ? <IconPause /> : <IconPlay />}
+                        </button>
+                      </div>
+                      <div className="rh-mono rh-sky-note">{activeDef ? 'Ocultas mientras hay un análisis abierto' : skyFor(clouds.kind, hour).text}</div>
+                    </div>
+                  )}
                   <div className="rh-ctl">
                     <div className="rh-head"><label htmlFor="rh-exag">Exageración vertical</label><output htmlFor="rh-exag">{exag.toFixed(1)}×</output></div>
                     <input id="rh-exag" type="range" min={1} max={6} step={0.1} value={exag}
@@ -350,7 +387,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                     {info && <div className="rh-mono rh-sunline">Hoy amanece a las {fmtHour(info.sunrise)} y anochece a las {fmtHour(info.sunset)}</div>}
                   </div>
                   <div className="rh-mono rh-keys">Arrastrar: girar · Clic derecho o Shift: mover · Rueda: acercar donde apuntas · Clic: municipio · Doble clic: ir ahí</div>
-                  <div className="rh-mono rh-credits">Elevación: INEGI (Continental relief 2016) y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS) · Ríos y presas: © OpenStreetMap y red de drenaje calculada del relieve · Límites: INEGI 2022 · Localidades y colonias: INEGI (Censo 2020, catálogo de localidades y DENUE){baseCredit && ` · ${baseCredit}`}</div>
+                  <div className="rh-mono rh-credits">Elevación: INEGI (Continental relief 2016) y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS) · Ríos y presas: © OpenStreetMap y red de drenaje calculada del relieve · Límites: INEGI 2022 · Localidades y colonias: INEGI (Censo 2020, catálogo de localidades y DENUE){layers.clouds && ' · Nubes: simuladas, según la lluvia media anual de INEGI'}{baseCredit && ` · ${baseCredit}`}</div>
                 </div>
               )}
             </div>

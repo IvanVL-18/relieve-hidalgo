@@ -17,6 +17,10 @@ que se puede incrustar en cualquier sitio React.
 - Ríos calculados del relieve y guiados por OpenStreetMap, presas, límites municipales de INEGI, curvas de nivel,
   localidades del censo y regiones. Las líneas se ven nítidas a cualquier acercamiento.
 - Sol en su posición real para la hora elegida; de noche se encienden las 4 690 localidades según su población.
+- Nubes en 3D iluminadas por el Sol de esa hora y con su sombra sobre el relieve: cielo automático (mar de nubes al
+  amanecer, cúmulos de día, tormentas con relámpagos por la tarde), cúmulos, nublado, niebla o tormenta, con cantidad,
+  dirección del viento y lapso de tiempo. Se forman más donde llueve más (lluvia media anual de INEGI), su base sigue al
+  relieve y de noche las ciudades iluminan su base. Se ocultan mientras hay un análisis abierto.
 - Buscador con los 84 municipios, las 5 297 localidades de INEGI (las 4 690 del censo y las deshabitadas o de una o
   dos viviendas del catálogo de localidades), ~2 800 colonias, fraccionamientos y barrios, ríos y presas. De cerca se
   etiquetan todas las localidades del censo y, más de cerca, las colonias de las ciudades.
@@ -55,7 +59,8 @@ npm run dev
 
 Parámetros útiles en la URL: `?analisis=accesibilidad` (o `poblacion`, `localidades`, `marginacion`, `cuencas`, `inundacion`, `laderas`,
 `cambio-uso`),
-`?mapa=satelite` o `?mapa=altitud`, `?hora=19.5` y `?embed` (el mapa dentro de una página normal).
+`?mapa=satelite` o `?mapa=altitud`, `?hora=19.5`, `?nubes=tormenta` (o `auto`, `cumulos`, `nublado`, `niebla`, `no`),
+`?lapso` (nubes en movimiento) y `?embed` (el mapa dentro de una página normal).
 
 Los datos procesados ya vienen en `src/relieve/data/`, así que no hace falta descargar nada para correrlo.
 
@@ -77,6 +82,9 @@ import { RelieveHidalgo } from './relieve';
   />
 </div>
 ```
+
+El cielo inicial se elige con `initialClouds={{ kind: 'niebla', amount: 0.7, wind: 0, play: true }}` y se apaga con
+`initialLayers={{ clouds: false }}`.
 
 Los estilos están aislados con el prefijo `rh-`, así que conviven con Bootstrap y Tailwind. three.js y los análisis
 se descargan solo cuando el mapa aparece. Si los datos se sirven desde otra carpeta (por ejemplo, el `public/` de
@@ -139,7 +147,7 @@ no la necesita: lee archivos estáticos comprimidos. La base es para consultas, 
 | Elevación | INEGI, Continental relief 2016, y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS Open Data) | Términos de libre uso del INEGI; USGS: dominio público |
 | Límites municipales | INEGI, Marco Geoestadístico 2022 | Términos de libre uso del INEGI |
 | Uso del suelo y vegetación | INEGI, Series VII y VI 1:250 000 (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
-| Lluvia media anual (comparación en laderas) | INEGI, precipitación media anual 1910–2009 (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
+| Lluvia media anual (nubes; en laderas solo para comparar) | INEGI, precipitación media anual 1910–2009 (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
 | Lluvia intensa (laderas) | Climate Hazards Center (UCSB), CHIRPS v3.0, lluvia por pentadas a 0.05° | Dominio público (citar doi:10.15780/G2JQ0P) |
 | Tipo de roca (laderas) | INEGI, geología 1:250 000 serie I (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
 | Deslizamientos y zonas de peligro | CENAPRED, Atlas Nacional de Riesgos: atlas estatal de Hidalgo | Información pública del Gobierno de México |
@@ -182,6 +190,8 @@ Estas atribuciones aparecen en el mapa y en la imagen descargable, y deben conse
 - El **cambio de uso de suelo** compara series 1:250 000: los cambios pequeños no se ven y parte de las diferencias son
   de interpretación entre series.
 - En las planicies, el relieve de INEGI trae un rayado; al acercarse, el sombreado de 30 m se usa solo en laderas.
+- Las **nubes** son una simulación para ver el relieve con distintos cielos, no un pronóstico ni una imagen de satélite:
+  se reparten según la lluvia media anual y la hora, no según el tiempo de hoy.
 
 ![Hidalgo de noche](docs/noche.webp)
 
@@ -192,7 +202,7 @@ src/relieve/           componente integrable
   engine/              motor 3D (three.js): relieve con niveles de detalle, teselas, capas raster, rutas, mapas base
   analyses/            análisis y su registro
   shared/              lógica compartida por el navegador y los scripts de datos (rutas, cuencas, pendientes)
-  worker/              arranque del relieve y worker de relieve (relieve fino, teselas y consultas de los análisis)
+  worker/              arranque del relieve, worker de relieve (relieve fino, teselas y consultas de los análisis) y clima de las nubes
   data/                datos procesados que carga el mapa
 scripts/pipeline/      descarga y procesamiento de fuentes (relieve, hidrología, población…), carga a PostgreSQL
 scripts/               capturas (npm run shot), regresión visual (npm run visual) y rendimiento (npm run perf)

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { BASE_KM } from '../shared/geo';
 import { HEIGHT_GLSL, withHeights, type HeightUniforms } from './heights';
 
-/** Ruido de valor y fbm en GLSL (nubes, ondas del agua, estratos). */
+/** Ruido de valor y fbm en GLSL (ondas del agua, estratos). */
 const NOISE = /* glsl */ `
 float rhHash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 float rhNoise(vec2 p) {
@@ -25,8 +25,6 @@ export function makeSharedUniforms() {
   return {
     uTime: { value: 0 },
     uNight: { value: 0 },
-    uClouds: { value: 1 },
-    uWind: { value: new THREE.Vector2(0.006, 0.0025) },
     /** sRGB de salida: se mezcla después de la conversión de color */
     uHazeColor: { value: new THREE.Vector3(0.66, 0.73, 0.8) },
     uHazeAmt: { value: 0.45 },
@@ -100,7 +98,11 @@ export function makeTerrainUniforms(shared: SharedUniforms, hu: HeightUniforms, 
     uSatPage: vec4(),
     uSatSlot: { value: 256 },
     uSatAtlasSize: vec2(),
-    uRock: { value: new THREE.Color('#6e5d4c') },
+    /** sombra de las nubes (clouds.ts): transmitancia hacia el Sol en un plano de referencia */
+    tCloudSh: { value: blankTexture([255, 255, 255, 255]) as THREE.Texture },
+    uCloudSh0: vec4(),
+    uCloudSh1: vec4(),
+    uRock:{ value: new THREE.Color('#6e5d4c') },
     uWaterShallow: { value: new THREE.Color('#3b7f8c') },
     uWaterDeep: { value: new THREE.Color('#1b4a63') },
     uSkyRefl: { value: new THREE.Color('#9fc3dc') },
@@ -147,7 +149,13 @@ export function createTerrainMaterial(u: TerrainUniforms, defines: Record<string
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform float uHover; uniform float uSel; uniform float uContours; uniform float uBorders; uniform float uWater;
-        uniform float uClouds; uniform float uNight; uniform float uTime; uniform float uChoroAmt; uniform vec2 uWind;
+        uniform float uNight; uniform float uTime; uniform float uChoroAmt;
+        // sombra de las nubes, salvo con cortina y dos capas raster: ahí no cabe en los 16 muestreadores (y esas solo
+        // salen con un análisis abierto, cuando las nubes están ocultas)
+        #if !(RH_RASTERS > 1 && defined(RH_COMPARE))
+        #define RH_CLOUDSH
+        uniform sampler2D tCloudSh; uniform vec4 uCloudSh0; uniform vec4 uCloudSh1;
+        #endif
         uniform sampler2D tMuni; uniform vec2 uGrid; uniform vec2 uGridMax;
         uniform sampler2D tFields; uniform vec2 uFieldsSize; uniform sampler2D tPalette;
         uniform float uBaseKindA; uniform sampler2D tBaseA; uniform vec2 uBaseSizeA; uniform float uBaseTilesA; uniform float uBaseTex;
@@ -375,11 +383,15 @@ export function createTerrainMaterial(u: TerrainUniforms, defines: Record<string
         // oclusión: apertura del cielo del relieve de 90 m si ya llegó, si no la aproximación de 270 m
         reflectedLight.indirectDiffuse *= rhAOv;
         reflectedLight.directDiffuse *= mix(1.0, rhAOv, 0.35);
-        if (uClouds > 0.0) {
-          float cl = smoothstep(0.54, 0.82, rhFbm(vXZ / 24.0 + uWind * uTime));
-          float cs = 1.0 - 0.45 * cl * uClouds;
+        #ifdef RH_CLOUDSH
+        if (uCloudSh1.z > 0.0) {
+          // sombra de las nubes: se consulta donde la recta hacia el Sol cruza el plano de referencia (clouds.ts)
+          vec2 cq = (vXZ + uCloudSh0.xy - uCloudSh0.zw * vHM) * uCloudSh1.xy;
+          float cs = mix(1.0, textureLod(tCloudSh, cq, 0.0).r, uCloudSh1.z);
           reflectedLight.directDiffuse *= cs; reflectedLight.directSpecular *= cs;
+          reflectedLight.indirectDiffuse *= 1.0 - uCloudSh1.w;
         }
+        #endif
         reflectedLight.directDiffuse *= 1.0 - 0.32 * rhDim;
         reflectedLight.indirectDiffuse *= 1.0 - 0.32 * rhDim;`)
       .replace('#include <premultiplied_alpha_fragment>', `${HAZE}

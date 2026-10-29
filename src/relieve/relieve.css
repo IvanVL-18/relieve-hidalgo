@@ -154,6 +154,23 @@
   background: linear-gradient(90deg, rgba(120, 140, 200, 0.22) 0 var(--rh-rise, 12%), transparent var(--rh-rise, 12%) var(--rh-set, 87%), rgba(120, 140, 200, 0.22) var(--rh-set, 87%)) center / 100% 6px no-repeat;
 }
 .rh-sunline { font-size: 0.6rem; }
+/* nubes: tipo de cielo, cantidad, viento y lapso de tiempo */
+.rh-sky { display: grid; gap: 8px; animation: rh-in 0.2s ease-out; }
+.rh-seg.rh-seg5 { grid-template-columns: repeat(5, 1fr); }
+.rh-seg5 button { font-size: 0.72rem; padding: 7px 0; }
+.rh-sky-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) auto; gap: 12px; align-items: end; }
+.rh-sky-row label { font-size: 0.78rem; }
+.rh-sky-row output { white-space: nowrap; }
+.rh-wind-arrow { display: inline-grid; place-items: center; transition: transform 0.2s; }
+.rh-sky-play {
+  appearance: none; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 1px solid var(--rh-line); background: transparent; color: var(--rh-fg); transition: color 0.2s, background-color 0.2s, border-color 0.2s;
+}
+.rh-sky-play svg { width: 11px; height: 11px; fill: currentColor; stroke: currentColor; stroke-width: 2.4; stroke-linejoin: round; stroke-linecap: round; }
+.rh-sky-play:hover:not(:disabled) { border-color: rgba(238, 241, 245, 0.4); }
+.rh-sky-play[aria-pressed="true"] { background: var(--rh-accent); border-color: var(--rh-accent); color: #1a1408; }
+.rh-sky-play:disabled { opacity: 0.45; cursor: default; }
+.rh-sky-note { font-size: 0.58rem; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rh-credits, .rh-keys { line-height: 1.6; font-size: 0.6rem; }
 
 /* minimapa */

@@ -2,9 +2,11 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import metaJson from '../data/meta.json';
 import { BASE_KM, makeGeo, type Geo } from '../shared/geo';
+import type { CloudSettings } from '../shared/clouds';
 import type { TerrainApi } from '../shared/terrain';
 import type { BuildRequest, BuildResult, DetailResult, LinesResult, Meta, TilePackInfo, WorkerMessage } from '../shared/types';
 import { ALT_STOPS_HEX } from '../worker/palette';
+import { Clouds } from './clouds';
 import { Heightfield, type Hit, type Tiles30 } from './heightfield';
 import { heightDefines, makeHeightUniforms, type HeightUniforms } from './heights';
 import { Labels } from './labels';
@@ -87,6 +89,8 @@ export interface EngineOptions {
   hour: number;
   layers: Layers;
   baseMap: BaseMapId;
+  /** tipo de cielo, cantidad de nubes, viento y lapso de tiempo (la capa se enciende con layers.clouds) */
+  clouds?: Partial<CloudSettings>;
   autoRotate: boolean;
   /** rueda solo con Ctrl/⌘ (para incrustar el mapa en una página que se desplaza) */
   cooperativeGestures: boolean;
@@ -195,6 +199,9 @@ export class ReliefEngine {
   private lastTiles = 0;
   private clickHandlers: ((hit: MapHit) => boolean | void)[] = [];
   private hoverProviders: ((hit: MapHit) => string[] | null)[] = [];
+  private clouds: Clouds | null = null;
+  /** análisis abiertos (ámbitos vivos): mientras haya alguno, las nubes se ocultan para no tapar los datos */
+  private scopes = 0;
 
   // estado
   private ex = 0.02;
@@ -221,6 +228,8 @@ export class ReliefEngine {
   private labelsDirty = true;
   private miniDirty = true;
   private lastMove = 0;
+  /** último cuadro con la cámara, las nubes o una animación en movimiento */
+  private lastActive = 0;
   private ambientUntil = 0;
   private fullDpr: number;
   private dpr: number;
@@ -460,8 +469,18 @@ export class ReliefEngine {
     night.renderOrder = 2;
     this.model.add(night);
 
-    this.disposables.push(palette, terrainMat, casterMat, casterDepth, lod, wg, wallMat, wallDepth, dg, dotMat, ng, nightMat);
+    // nubes: sus pasadas se compilan junto con la escena
+    const clouds = (this.clouds = new Clouds(this.renderer, this.hu, tu, tu.tFields, this.shared, this.small));
+    clouds.set({ ...this.opts.clouds });
+    clouds.setOn(this.layers.clouds);
+    clouds.setSize(this.el.stage.clientWidth || 1, this.el.stage.clientHeight || 1);
+    this.scene.add(clouds.composite);
+    this.updateCloudLight();
+
+    this.disposables.push(palette, terrainMat, casterMat, casterDepth, lod, wg, wallMat, wallDepth, dg, dotMat, ng, nightMat, clouds);
     this.prep = { tu, palette, walls, dots, night, compile: this.renderer.compileAsync(this.scene, this.camera).catch(() => undefined) };
+    // las pasadas de las nubes se compilan aparte: no retrasan el primer cuadro (aparecen cuando terminan)
+    clouds.compile().then(() => this.wake());
   }
 
   private setup(res: BuildResult) {
@@ -507,6 +526,13 @@ export class ReliefEngine {
     }
     const g = this.geo;
     this.lod!.setData({ x0: g.xMin, z0: g.zMin, sx: meta.step * g.KX, sz: meta.step * g.KZ }, res.elev, state, W, H);
+
+    // nubes: el clima sale del relieve, los municipios y la lluvia media anual (aparecen cuando llega la lluvia)
+    this.clouds?.setTerrain({
+      elev: res.elev, muni: res.muni, W, H, cellKm: (meta.step * (g.KX + g.KZ)) / 2,
+      xMin: g.xMin, xMax: g.xMax, zMin: g.zMin, zMax: g.zMax, maxElev: meta.relief.max,
+    });
+    this.clouds?.loadWeather(this.dataUrl('capas/lluvia.bin', new URL('../data/capas/lluvia.bin', import.meta.url).href)).then(() => this.wake());
 
     const wg = prep.walls.geometry;
     wg.setAttribute('position', new THREE.BufferAttribute(res.walls.position, 3));
@@ -790,6 +816,8 @@ export class ReliefEngine {
   setLayer(key: LayerKey, on: boolean) { this.layers[key] = on; this.applyLayers(); this.labelsDirty = true; this.invalidate(); }
   setExaggeration(x: number) { this.exTarget = x; this.touch(); this.wake(); }
   setHour(h: number) { this.hour = h; this.placeSun(); this.invalidate(); }
+  /** Cielo: tipo de nubes, cantidad, viento y lapso de tiempo (la capa se enciende con setLayer('clouds')). */
+  setClouds(s: Partial<CloudSettings>) { this.clouds?.set(s); this.invalidate(); }
   /** URL de un archivo de datos: carpeta pública si se configuró dataBaseUrl, si no la que resolvió el bundler. */
   dataUrl(name: string, bundled: string) {
     const base = this.opts.dataBaseUrl;
@@ -1022,6 +1050,8 @@ export class ReliefEngine {
     const hook = <T>(list: T[], fn: T) => { list.push(fn); const off = () => { const i = list.indexOf(fn); if (i >= 0) list.splice(i, 1); }; offs.push(off); return off; };
     const ov = () => { if (!this.overlays) throw new Error('El relieve aún no está listo'); return this.overlays; };
     const rs = () => { if (!this.rasters) throw new Error('El relieve aún no está listo'); return this.rasters; };
+    this.clouds?.setSuppressed(++this.scopes > 0);
+    this.invalidate();
     return {
       meta,
       elevationAt: (lon, lat) => this.hf?.surfaceLL(lat, lon) ?? 0,
@@ -1047,6 +1077,7 @@ export class ReliefEngine {
         if (fill) this.setMunicipioColors(null);
         if (overlay) this.setOverlay(null);
         if (pin) this.labels?.setPin(null);
+        this.clouds?.setSuppressed(--this.scopes > 0);
         this.pointer.dirty = true;
         this.invalidate();
       },
@@ -1068,6 +1099,8 @@ export class ReliefEngine {
     const probe = this.probe.visible, hover = this.tu?.uHover.value ?? 0;
     this.probe.visible = false;
     if (this.tu) this.tu.uHover.value = 0;
+    // nubes a resolución completa aunque el último cuadro fuera en movimiento
+    if (this.clouds?.visible) this.clouds.render(this.camera, this.controls.target, this.ex);
     this.renderer.render(this.scene, this.camera);
     ctx.drawImage(src, 0, 0);
     this.probe.visible = probe;
@@ -1130,6 +1163,29 @@ export class ReliefEngine {
     this.shared.uHazeColor.value.set(...sky.haze);
     this.el.root.style.setProperty('--rh-glow', `rgb(${sky.glow.map(v => Math.round(v * 255)).join(' ')})`);
     this.shadowDirty = true;
+    this.updateCloudLight();
+  }
+
+  /** Luz de las nubes: la principal (Sol o, de noche, Luna), la del cielo y la de las ciudades; y su hora. */
+  private updateCloudLight() {
+    const cl = this.clouds;
+    if (!cl) return;
+    const key = this.sun.intensity >= this.moon.intensity ? this.sun : this.moon;
+    const sky = this.hemi.intensity / Math.PI, el = (this.sunElevDeg * Math.PI) / 180;
+    cl.setLight({
+      dir: key.position.clone().normalize(),
+      // radiancia de una superficie blanca de frente a la luz (como la ve el relieve)
+      // (un poco menos saturada que la del relieve: las nubes se leen blancas salvo al atardecer)
+      color: key.color.clone().lerp(new THREE.Color(1, 1, 1).multiplyScalar(0.2126 * key.color.r + 0.7152 * key.color.g + 0.0722 * key.color.b), 0.25)
+        .multiplyScalar(key.intensity / Math.PI),
+      ambTop: this.hemi.color.clone().multiplyScalar(sky),
+      // debajo: cielo atenuado con algo del color del suelo
+      ambBottom: this.hemi.color.clone().multiplyScalar(0.55).add(this.hemi.groundColor.clone().multiplyScalar(0.3)).multiplyScalar(sky),
+      glow: this.tu ? this.tu.uCityLight.value.clone().multiplyScalar(this.shared.uNight.value) : new THREE.Color(0, 0, 0),
+      shadow: 0.85 * smooth(-0.03, 0.1, el),
+      night: this.shared.uNight.value,
+    });
+    cl.setHour(this.hour);
   }
 
   private applyLayers() {
@@ -1138,8 +1194,7 @@ export class ReliefEngine {
     this.tu.uWater.value = L.water ? 1 : 0;
     this.tu.uBorders.value = L.borders ? 1 : 0;
     this.tu.uContours.value = L.contours ? 1 : 0;
-    this.shared.uClouds.value = L.clouds ? 1 : 0;
-    if (L.clouds) this.touch();
+    this.clouds?.setOn(L.clouds);
   }
 
   /* ================= cámara ================= */
@@ -1296,6 +1351,7 @@ export class ReliefEngine {
     if (!w || !h) return;
     this.renderer.setSize(w, h, false);
     this.overlays?.resolution.set(w, h);
+    this.clouds?.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.fov = this.camera.aspect < 0.8 ? 46 : 32;
     this.camera.updateProjectionMatrix();
@@ -1492,9 +1548,12 @@ export class ReliefEngine {
     const P = this.pointer;
     if (P.dirty || (moved && P.in && this.frameN % 3 === 0)) { this.updateHover(); P.dirty = false; }
 
-    // nubes y agua se animan mientras hay actividad reciente; luego se quedan quietas y no gastan GPU
-    const ambient = this.shared.uClouds.value > 0 && !this.reduceMotion && (now < this.ambientUntil || c.autoRotate);
+    // el agua se anima mientras hay actividad reciente; luego se queda quieta y no gasta GPU
+    const sky = this.clouds;
+    const ambient = this.layers.water && !this.reduceMotion && (now < this.ambientUntil || c.autoRotate);
     if (ambient) this.shared.uTime.value += dt;
+    // las nubes avanzan con el lapso de tiempo (y despacio mientras el mapa gira solo); aparecen y se van con fundido
+    if (sky?.step(dt, this.reduceMotion ? 0 : sky.playing ? 1 : c.autoRotate ? 0.25 : 0, intro >= 1)) active = true;
     const dist = this.curDist();
     this.shared.uHazeRef.value = dist;
     // la sombra del bloque sobre el suelo se desvanece de cerca (cada texel de la sombra mide ~70 m)
@@ -1513,6 +1572,9 @@ export class ReliefEngine {
 
     // resolución adaptable: si al moverse no alcanza ~40 cps, baja la densidad de píxeles; en reposo la recupera
     const moving = active || moved;
+    if (moving) this.lastActive = now;
+    // al detenerse, un cuadro más con las nubes a resolución completa
+    if (!moving && sky?.coarse && now - this.lastActive > 150) this.renderDirty = true;
     if (moving) {
       this.frameEma = this.frameEma * 0.9 + dt * 1000 * 0.1;
       if (++this.moveFrames > 20 && this.frameEma > 26 && this.dpr > 0.75) {
@@ -1528,6 +1590,8 @@ export class ReliefEngine {
     }
 
     if (moving || this.renderDirty || (ambient && this.frameN % 2 === 0)) {
+      // volumen y sombra de las nubes (en sus propios destinos) antes del cuadro; al moverse, con menos resolución
+      if (sky?.visible) sky.render(cam, c.target, this.ex, moving);
       if (this.shadowDirty) { this.renderer.shadowMap.needsUpdate = true; this.shadowDirty = false; }
       const tr = this.timings.firstFrame === undefined ? performance.now() : 0;
       this.renderer.render(this.scene, cam);
@@ -1535,7 +1599,7 @@ export class ReliefEngine {
       this.renderDirty = false;
     }
 
-    const keep = moving || ambient || this.renderDirty || this.labelsDirty || this.miniDirty || P.dirty || this.dpr < this.fullDpr || this.tileDirty;
+    const keep = moving || ambient || this.renderDirty || this.labelsDirty || this.miniDirty || P.dirty || this.dpr < this.fullDpr || this.tileDirty || !!sky?.coarse;
     if (keep) this.raf = requestAnimationFrame(this.frame);
     else this.running = false;
   };
