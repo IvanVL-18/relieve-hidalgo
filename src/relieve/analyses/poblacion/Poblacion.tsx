@@ -3,7 +3,8 @@ import type { PointsHandle } from '../../engine/mapApi';
 import { GRADOS, type Localidades, type Municipio } from '../datasets';
 import { POP_RAMP, classOf, fmtInt, fmtPct, fmtShort, hexToRgba, quantileBreaks } from '../scales';
 import type { AnalysisProps } from '../types';
-import { Bars, ClassLegend, Facts, Loading, Note, Section, Seg, Stats, useAsync } from '../ui';
+import { Bars, ClassLegend, Facts, Loading, Note, Section, Seg, Stats, oneOf, parseMuni, useAsync, useLinked } from '../ui';
+import { locIndex, locKey } from '../datasets';
 
 /** Clases de tamaño de localidad (INEGI). */
 export const SIZE_BREAKS = [249, 2499, 14999, 99999];
@@ -21,13 +22,29 @@ function heights(l: Localidades, escala: Escala) {
 }
 
 export default function Poblacion({ ctx }: AnalysisProps) {
-  const { map, data } = ctx;
+  const { map, data, link } = ctx;
   const [all, err] = useAsync(() => Promise.all([data.municipios(), data.localidades()]), []);
-  const [medida, setMedida] = useState<Medida>('pob');
-  const [escala, setEscala] = useState<Escala>('lineal');
-  const [sel, setSel] = useState<Sel>(null);
+  const [medida, setMedida] = useLinked<Medida>(link, 'medida', 'pob', oneOf('pob', 'densidad'));
+  const [escala, setEscala] = useLinked<Escala>(link, 'columnas', 'lineal', oneOf('lineal', 'raiz', 'no'));
+  const [sel, setSel] = useState<Sel>(() => { const m = parseMuni(link.initial.mun ?? ''); return m ? { kind: 'mun', id: m } : null; });
   const cols = useRef<PointsHandle | null>(null);
   const mun = all?.[0], loc = all?.[1];
+  // selección de un enlace: el municipio al abrir; la localidad, cuando llegan los datos
+  const linkLoc = useRef<string | undefined>(link.initial.loc);
+  useEffect(() => {
+    if (sel?.kind === 'mun') map.select(sel.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map]);
+  useEffect(() => {
+    if (!loc || !linkLoc.current) return;
+    const i = locIndex(loc, linkLoc.current);
+    linkLoc.current = undefined;
+    if (i >= 0) { setSel({ kind: 'loc', i }); map.setPin(loc.nombre[i], loc.lon[i], loc.lat[i]); }
+  }, [map, loc]);
+  useEffect(() => {
+    link.set('mun', sel?.kind === 'mun' ? String(sel.id) : null);
+    link.set('loc', sel?.kind === 'loc' && loc ? locKey(loc, sel.i) : linkLoc.current ?? null);
+  }, [link, sel, loc]);
 
   const breaks = useMemo(() => (mun ? quantileBreaks(mun.map(m => m[medida]), 5) : []), [mun, medida]);
 

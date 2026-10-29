@@ -11,12 +11,13 @@ import type { Datasets } from './analyses/datasets';
 import { ANALYSES } from './analyses/registry';
 import type { LayerKey, Layers, LoadStage, MunicipioInfo, ReadyInfo, ReliefEngine } from './engine/Engine';
 import { CLOUD_DEFAULTS, CLOUD_KINDS, skyFor, windName, type CloudSettings } from './shared/clouds';
+import { viewStateUrl, type ViewState } from './shared/enlaces';
 import type { SearchItem } from './engine/search';
 import { BASE_MAPS, type BaseMapId } from './shared/basemaps';
 import { USV_GROUPS } from './shared/usv';
 import { AnalysisMenu, AnalysisPanel } from './ui/Analyses';
 import {
-  IconArrow, IconCamera, IconChevron, IconClose, IconCompass, IconExpand, IconGrid, IconMinus, IconMoon, IconPause, IconPlay, IconPlus, IconShrink, IconSun, IconTarget,
+  IconArrow, IconCamera, IconChevron, IconClose, IconCompass, IconExpand, IconGrid, IconLink, IconMinus, IconMoon, IconPause, IconPlay, IconPlus, IconShrink, IconSun, IconTarget,
 } from './ui/icons';
 import { SearchBox } from './ui/SearchBox';
 import { ALT_STOPS_HEX } from './worker/palette';
@@ -28,6 +29,8 @@ export interface RelieveApi {
   goHome(): void;
   setMunicipioColors(colors: Record<string, string> | null, strength?: number): void;
   screenshot(): Promise<Blob>;
+  /** estado para un enlace a esta vista (null mientras carga) */
+  getViewState(): ViewState | null;
 }
 
 export interface RelieveHidalgoProps {
@@ -48,6 +51,17 @@ export interface RelieveHidalgoProps {
   /** análisis abierto al cargar (id del registro, p. ej. «accesibilidad») */
   initialAnalysis?: string | null;
   onAnalysisChange?: (id: string | null) => void;
+  /**
+   * vista inicial de un enlace (decodeViewState(location.search)): cámara, mapa base, hora, exageración, nubes,
+   * municipio y análisis con sus parámetros; lo que traiga manda sobre las demás props initial*
+   */
+  initialView?: ViewState;
+  /** avisa el estado al detenerse la cámara o cambiar algo (para que el anfitrión actualice la URL con history.replaceState) */
+  onViewChange?: (state: ViewState) => void;
+  /** dirección del botón «Copiar enlace»; por omisión, la página actual con el estado en la consulta (viewStateUrl) */
+  shareUrl?: (state: ViewState) => string;
+  /** botón «Copiar enlace» */
+  showShare?: boolean;
   autoRotate?: boolean;
   /** pensado para incrustar en una página con scroll: la rueda solo acerca con Ctrl/⌘ */
   cooperativeGestures?: boolean;
@@ -83,8 +97,10 @@ const altRampCss = 'linear-gradient(90deg,' + ALT_STOPS_HEX.filter(s => s[0] <= 
 
 export function RelieveHidalgo(props: RelieveHidalgoProps) {
   const {
-    className, style, title = 'Relieve de Hidalgo', showSearch = true, showLegend = true, showPanel = true, showMinimap = true, showAnalyses = true,
+    className, style, title = 'Relieve de Hidalgo', showSearch = true, showLegend = true, showPanel = true, showMinimap = true, showAnalyses = true, showShare = true,
   } = props;
+  const iv = props.initialView ?? {};
+  const firstAnalysis = iv.analysis ?? props.initialAnalysis ?? null;
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement>(null);
@@ -105,20 +121,23 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   const [stage, setStage] = useState<LoadStage | 'ready' | 'error'>('download');
   const [error, setError] = useState('');
   const [info, setInfo] = useState<ReadyInfo | null>(null);
-  const [layers, setLayers] = useState<Layers>({ ...DEFAULT_LAYERS, ...props.initialLayers });
-  const [clouds, setClouds] = useState<CloudSettings>({ ...CLOUD_DEFAULTS, ...props.initialClouds });
-  const [exag, setExag] = useState(props.initialExaggeration ?? 2.5);
-  const [hour, setHour] = useState(props.initialHour ?? 16.5);
-  const [baseMap, setBaseMap] = useState<BaseMapId>(props.initialBaseMap ?? 'usodesuelo');
+  const [layers, setLayers] = useState<Layers>(() => ({ ...DEFAULT_LAYERS, ...props.initialLayers, ...(iv.clouds ? { clouds: iv.clouds !== 'no' } : {}) }));
+  const [clouds, setClouds] = useState<CloudSettings>(() => ({ ...CLOUD_DEFAULTS, ...props.initialClouds, ...(iv.clouds && iv.clouds !== 'no' ? { kind: iv.clouds } : {}) }));
+  const [exag, setExag] = useState(iv.exaggeration ?? props.initialExaggeration ?? 2.5);
+  const [hour, setHour] = useState(Math.min(20.5, Math.max(5, iv.hour ?? props.initialHour ?? 16.5)));
+  const [baseMap, setBaseMap] = useState<BaseMapId>(iv.baseMap ?? props.initialBaseMap ?? 'usodesuelo');
   const [baseLoading, setBaseLoading] = useState(false);
-  const [analysis, setAnalysis] = useState<string | null>(props.initialAnalysis ?? null);
+  const [analysis, setAnalysis] = useState<string | null>(firstAnalysis);
+  const [params, setParams] = useState<Record<string, string>>({});
+  // los parámetros del enlace solo valen para el análisis con el que se abrió
+  const linkParams = useRef(iv.params ?? null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [datasets, setDatasets] = useState<Datasets | null>(null);
   const [placesVersion, setPlacesVersion] = useState(0);
   const [small, setSmall] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [selected, setSelected] = useState<MunicipioInfo | null>(null);
-  const [hint, setHint] = useState(false);
+  const [hint, setHint] = useState('');
   const [full, setFull] = useState(false);
   const hintTimer = useRef(0);
 
@@ -126,7 +145,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   useEffect(() => {
     let cancelled = false, engine: ReliefEngine | null = null;
     const root = rootRef.current!;
-    if (root.clientWidth < 640 || root.clientHeight < 760 || props.initialAnalysis) setPanelOpen(false);
+    if (root.clientWidth < 640 || root.clientHeight < 760 || firstAnalysis) setPanelOpen(false);
     setSmall(root.clientWidth < 640);
     let data: Datasets | null = null;
     import('./engine/Engine').then(({ ReliefEngine }) => {
@@ -143,13 +162,16 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
             dataBaseUrl: props.dataBaseUrl,
             quality: props.quality,
             exaggeration: exag, hour, layers, baseMap, clouds,
-            autoRotate: props.autoRotate ?? true,
+            // un enlace con vista abre quieto en ella
+            autoRotate: (props.autoRotate ?? true) && !iv.view,
             cooperativeGestures: props.cooperativeGestures ?? false,
             debug: props.debug,
             onProgress: s => setStage(s),
             onReady: i => {
               setStage('ready'); setInfo(i);
               if (propsRef.current.municipioColors) engine?.setMunicipioColors(propsRef.current.municipioColors);
+              if (iv.view) engine?.setView(iv.view, 0);
+              if (iv.municipio && !firstAnalysis) engine?.select(Number(iv.municipio.slice(2)), !iv.view);
               // los datos de los análisis se cargan aparte y solo cuando se abre uno
               import('./analyses/datasets').then(({ createDatasets }) => {
                 if (cancelled || !engine) return;
@@ -168,11 +190,8 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
             },
             onError: msg => { setStage('error'); setError(msg); },
             onSelect: m => { setSelected(m); propsRef.current.onSelectMunicipio?.(m); },
-            onGestureHint: () => {
-              setHint(true);
-              clearTimeout(hintTimer.current);
-              hintTimer.current = window.setTimeout(() => setHint(false), 1400);
-            },
+            onGestureHint: () => flash('Usa Ctrl + rueda para acercar el mapa', 1400),
+            onViewChange: () => emitView(),
           },
         );
         engineRef.current = engine;
@@ -202,10 +221,47 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
     goHome: () => engineRef.current?.goHome(),
     setMunicipioColors: (c, s) => engineRef.current?.setMunicipioColors(c, s),
     screenshot: () => engineRef.current?.screenshot() ?? Promise.reject(new Error('El relieve aún no está listo')),
+    getViewState: () => viewState(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }), []);
 
   const eng = () => engineRef.current;
   const ready = stage === 'ready';
+
+  // enlaces a vistas: el estado se arma al momento con lo último de cada cosa
+  const linkRef = useRef({ baseMap, hour, exag, layers, clouds, selected, analysis, params, ready });
+  linkRef.current = { baseMap, hour, exag, layers, clouds, selected, analysis, params, ready };
+  const viewState = (): ViewState | null => {
+    const e = engineRef.current, L = linkRef.current;
+    if (!e || !L.ready) return null;
+    return {
+      view: e.getView(), baseMap: L.baseMap, hour: L.hour, exaggeration: L.exag, clouds: L.layers.clouds ? L.clouds.kind : 'no',
+      // con un análisis abierto, el municipio lo guarda el análisis (en sus parámetros)
+      municipio: L.analysis ? undefined : L.selected?.code, analysis: L.analysis ?? undefined, params: L.analysis ? L.params : undefined,
+    };
+  };
+  const emitTimer = useRef(0);
+  function emitView() {
+    clearTimeout(emitTimer.current);
+    emitTimer.current = window.setTimeout(() => { const s = viewState(); if (s) propsRef.current.onViewChange?.(s); }, 250);
+  }
+  useEffect(() => { if (ready) emitView(); }, [ready, baseMap, hour, exag, layers.clouds, clouds.kind, selected, analysis, params]);
+  useEffect(() => () => clearTimeout(emitTimer.current), []);
+  function flash(text: string, ms: number) {
+    setHint(text);
+    clearTimeout(hintTimer.current);
+    hintTimer.current = window.setTimeout(() => setHint(''), ms);
+  }
+  const share = async () => {
+    const s = viewState();
+    if (!s) return;
+    const url = propsRef.current.shareUrl?.(s) ?? viewStateUrl(location.href, s);
+    // en celular, el menú de compartir del sistema
+    if (typeof navigator.share === 'function' && matchMedia('(pointer: coarse)').matches) {
+      try { await navigator.share({ title, url }); return; } catch (e) { if (e instanceof Error && e.name === 'AbortError') return; }
+    }
+    try { await navigator.clipboard.writeText(url); flash('Enlace copiado: abre esta misma vista', 1800); } catch { window.prompt('Copia el enlace a esta vista:', url); }
+  };
   const toggleLayer = (k: LayerKey) => { const on = !layers[k]; setLayers({ ...layers, [k]: on }); eng()?.setLayer(k, on); };
   const updateClouds = (s: Partial<CloudSettings>) => { setClouds(c => ({ ...c, ...s })); eng()?.setClouds(s); };
   const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -229,6 +285,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
     if (p && id !== 'altitud') { setBaseLoading(true); p.finally(() => setBaseLoading(false)); }
   };
   const openAnalysis = useCallback((id: string | null) => {
+    linkParams.current = null;
     setAnalysis(id);
     setMenuOpen(false);
     if (id) setPanelOpen(false);
@@ -249,7 +306,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
           {stage === 'error' ? error : <><span className="rh-spinner" aria-hidden="true" />{STAGE_TEXT[stage]}</>}
         </div>
       )}
-      <div className={'rh-hint' + (hint ? ' on' : '')} aria-hidden={!hint}>Usa Ctrl + rueda para acercar el mapa</div>
+      <div className={'rh-hint' + (hint ? ' on' : '')} role="status" aria-live="polite">{hint}</div>
 
       <div className="rh-hud">
         <div className="rh-tl">
@@ -265,7 +322,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
               <IconGrid />Análisis{activeDef && <span>{activeDef.titulo}</span>}
             </button>
           )}
-          {activeDef && engine && datasets && <AnalysisPanel id={activeDef.id} engine={engine} datasets={datasets} small={small} onClose={() => openAnalysis(null)} />}
+          {activeDef && engine && datasets && <AnalysisPanel id={activeDef.id} engine={engine} datasets={datasets} small={small} onClose={() => openAnalysis(null)} initialParams={linkParams.current} onParams={setParams} />}
           {!activeDef && selected && (
             <section className="rh-card" aria-label={`Municipio ${selected.name}`}>
               <header>
@@ -316,6 +373,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
             <button type="button" title="Vista inicial (R)" aria-label="Volver a la vista inicial" onClick={() => eng()?.goHome()}>3D</button>
             <div className="rh-sep" />
             <button type="button" title="Descargar imagen" aria-label="Descargar imagen de la vista" disabled={!ready} onClick={download}><IconCamera /></button>
+            {showShare && <button type="button" title="Copiar enlace a esta vista" aria-label="Copiar enlace a esta vista" disabled={!ready} onClick={share}><IconLink /></button>}
             {typeof document !== 'undefined' && document.fullscreenEnabled && (
               <button type="button" title={full ? 'Salir de pantalla completa' : 'Pantalla completa'} aria-label={full ? 'Salir de pantalla completa' : 'Pantalla completa'} onClick={toggleFull}>{full ? <IconShrink /> : <IconExpand />}</button>
             )}

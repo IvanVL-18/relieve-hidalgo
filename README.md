@@ -26,6 +26,9 @@ que se puede incrustar en cualquier sitio React.
   etiquetan todas las localidades del censo y, más de cerca, las colonias de las ciudades.
 - Ficha por municipio (población, superficie, altitudes), minimapa, imagen descargable con créditos y pantalla
   completa.
+- **Enlaces a vistas**: el botón de enlace copia una dirección que abre la misma vista (ángulo de cámara, mapa base,
+  hora, exageración, nubes, municipio y el análisis abierto con lo que se eligió en él, por ejemplo el punto de una
+  cuenca o el nivel de una inundación). En celular abre el menú de compartir.
 
 **Análisis** (botón «Análisis»)
 
@@ -39,8 +42,9 @@ que se puede incrustar en cualquier sitio React.
 | Simulador de inundación | Sube el nivel de un río (altura sobre su cauce) o de un valle (relleno hasta un nivel) y muestra la profundidad, el área, las localidades, los hospitales, escuelas y carreteras bajo el agua. Ilustrativo, no pronóstico |
 | Laderas inestables | Susceptibilidad a deslizamientos por pendiente (30 m), lluvia intensa, tipo de roca y cobertura vegetal, con el desglose de puntos de cada lugar, localidades y carreteras expuestas, comparación con el atlas estatal del CENAPRED y validación con los deslizamientos registrados |
 | Cambio de uso de suelo | Series VI (2014) y VII (2018) de INEGI: pérdida de bosque, urbanización, degradación y recuperación, con matriz de cambio por municipio y cortina para comparar |
+| Perfil de elevación | Corte del terreno entre dos o más puntos, en línea recta o por carretera: gráfica distancia–altura con la pendiente por tramos, subida y bajada acumuladas, punto más alto, municipios que cruza y tiempo por carretera; exporta CSV y PNG |
 
-El menú también muestra los análisis planeados («Próximamente»): perfil de elevación, antenas,
+El menú también muestra los análisis planeados («Próximamente»): antenas,
 potencial solar, movilidad, recorridos guiados, impresión 3D y más. Las piezas que necesitan ya están en la base: capas
 raster con su propia cobertura y paleta, cortina para comparar, y consultas de elevación, pendiente, cuencas y camino
 del agua (ver «Agregar un análisis»).
@@ -57,10 +61,12 @@ npm install
 npm run dev
 ```
 
-Parámetros útiles en la URL: `?analisis=accesibilidad` (o `poblacion`, `localidades`, `marginacion`, `cuencas`, `inundacion`, `laderas`,
-`cambio-uso`),
-`?mapa=satelite` o `?mapa=altitud`, `?hora=19.5`, `?nubes=tormenta` (o `auto`, `cumulos`, `nublado`, `niebla`, `no`),
-`?lapso` (nubes en movimiento) y `?embed` (el mapa dentro de una página normal).
+La dirección de la página sigue a la vista, así que se puede copiar de la barra del navegador o con el botón de enlace.
+Parámetros: `?vista=lon,lat,km,inclinación,rumbo` (cámara; km = distancia al punto que mira), `?analisis=accesibilidad`
+(o `poblacion`, `localidades`, `marginacion`, `cuencas`, `inundacion`, `laderas`, `cambio-uso`, `perfil`) con sus
+parámetros `a.*` (por ejemplo `&a.punto=-98.7654,21.2387` en cuencas), `?mapa=satelite` o `?mapa=altitud`, `?hora=19.5`,
+`?exag=3`, `?mun=13048`, `?nubes=tormenta` (o `auto`, `cumulos`, `nublado`, `niebla`, `no`), `?lapso` (nubes en
+movimiento), `?quieto` (sin giro) y `?embed` (el mapa dentro de una página normal).
 
 Los datos procesados ya vienen en `src/relieve/data/`, así que no hace falta descargar nada para correrlo.
 
@@ -86,6 +92,22 @@ import { RelieveHidalgo } from './relieve';
 El cielo inicial se elige con `initialClouds={{ kind: 'niebla', amount: 0.7, wind: 0, play: true }}` y se apaga con
 `initialLayers={{ clouds: false }}`.
 
+Para los enlaces a vistas, el componente no toca el historial del navegador: el anfitrión decide. Con la URL de la
+página:
+
+```tsx
+import { RelieveHidalgo, decodeViewState, viewStateUrl } from './relieve';
+
+<RelieveHidalgo
+  initialView={decodeViewState(location.search)}       // abre la vista que trae el enlace
+  onViewChange={s => history.replaceState(history.state, '', viewStateUrl(location.href, s))}
+/>
+```
+
+`viewStateUrl` conserva los parámetros propios de la página y reemplaza solo los del mapa. El botón «Copiar enlace»
+usa la página actual; con `shareUrl={s => ...}` se arma otra dirección, y `showShare={false}` lo oculta. La ref
+también da `getViewState()`.
+
 Los estilos están aislados con el prefijo `rh-`, así que conviven con Bootstrap y Tailwind. three.js y los análisis
 se descargan solo cuando el mapa aparece. Si los datos se sirven desde otra carpeta (por ejemplo, el `public/` de
 Laravel), usa `dataBaseUrl` y copia ahí el contenido de `src/relieve/data/`.
@@ -103,6 +125,8 @@ el paquete se descarga completo una vez y todo sigue funcionando.
 3. Si necesitas el relieve, pídelo a `ctx.data.terrain()`: elevación de puntos, perfiles, rejillas de elevación,
    pendiente, orientación o área drenada, cuenca de un punto y camino del agua (30 m donde hay teselas, si no 90 m).
 4. Regístralo en `src/relieve/analyses/registry.ts`.
+5. Para que lo que elige el usuario viaje en los enlaces, usa `useLinked` en lugar de `useState`:
+   `const [vista, setVista] = useLinked(ctx.link, 'vista', 'indice', oneOf('indice', 'atlas'))`.
 
 ```tsx
 const cuenca = await ctx.data.terrain().watershed(lon, lat);
@@ -190,6 +214,9 @@ Estas atribuciones aparecen en el mapa y en la imagen descargable, y deben conse
 - El **cambio de uso de suelo** compara series 1:250 000: los cambios pequeños no se ven y parte de las diferencias son
   de interpretación entre series.
 - En las planicies, el relieve de INEGI trae un rayado; al acercarse, el sombreado de 30 m se usa solo en laderas.
+- El **perfil** usa el relieve de 30 m: en puentes, túneles y cortes no ve la obra (el perfil baja a la barranca o sube
+  a la loma), y por carretera la pendiente de 100 m en 100 m puede salir mayor que la de la vía, que va cortada en la
+  ladera. La subida acumulada ignora vaivenes de menos de 3 m para no contar el ruido del relieve.
 - Las **nubes** son una simulación para ver el relieve con distintos cielos, no un pronóstico ni una imagen de satélite:
   se reparten según la lluvia media anual y la hora, no según el tiempo de hoy.
 

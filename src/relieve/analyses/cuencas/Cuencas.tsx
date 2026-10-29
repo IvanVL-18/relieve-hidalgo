@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { fmtPoints, parsePoints } from '../../shared/enlaces';
 import { makeGeo } from '../../shared/geo';
 import type { FlowPath, Watershed } from '../../shared/terrain';
 import type { Meta } from '../../shared/types';
@@ -120,9 +121,14 @@ const fmtKm = (km: number) => (km >= 100 ? fmtInt(km) : km.toFixed(1));
 const fmtArea = (a: number) => (a >= 10 ? fmtInt(a) : a.toFixed(1));
 
 export default function Cuencas({ ctx }: AnalysisProps) {
-  const { map, data, meta } = ctx;
+  const { map, data, meta, link } = ctx;
   const [base] = useAsync(() => Promise.all([data.localidades(), data.pendiente(), data.riosNombres()]), [data]);
-  const [pick, setPick] = useState<{ lon: number; lat: number; fly: boolean } | null>(null);
+  // fly: acercar al resultado; un punto que viene de un enlace no mueve la cámara (el enlace trae la suya)
+  const [pick, setPick] = useState<{ lon: number; lat: number; fly: boolean; link?: boolean } | null>(() => {
+    const p = parsePoints(link.initial.punto ?? '', 1);
+    return p ? { lon: p[0][0], lat: p[0][1], fly: false, link: true } : null;
+  });
+  useEffect(() => link.set('punto', pick ? fmtPoints([[pick.lon, pick.lat]]) : null), [link, pick]);
   const [res, setRes] = useState<{ ws: Watershed; down: FlowPath } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -144,7 +150,7 @@ export default function Cuencas({ ctx }: AnalysisProps) {
         setRes(r); setBusy(false);
         // de una cuenca grande se ve todo; las chicas ya están a la vista del clic
         const [W0, S0, E0, N0] = r.ws.grid.bounds, geo = makeGeo(meta), km = Math.max((E0 - W0) * geo.KX, (N0 - S0) * geo.KZ);
-        if (pick.fly || km > 25) map.flyTo((W0 + E0) / 2, (S0 + N0) / 2, Math.max(10, km * 1.25));
+        if (!pick.link && (pick.fly || km > 25)) map.flyTo((W0 + E0) / 2, (S0 + N0) / 2, Math.max(10, km * 1.25));
       },
       e => { if (alive) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); } },
     );

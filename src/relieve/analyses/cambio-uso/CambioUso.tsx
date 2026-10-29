@@ -5,7 +5,7 @@ import { USV_GROUPS } from '../../shared/usv';
 import type { UsoSuelo } from '../datasets';
 import { fmtInt } from '../scales';
 import type { AnalysisProps } from '../types';
-import { Bars, Facts, Loading, Note, Section, Seg, useAsync } from '../ui';
+import { Bars, Facts, Loading, Note, Section, Seg, oneOf, parseMuni, useAsync, useLinked } from '../ui';
 
 type Modo = 'cambios' | 'comparar';
 const ETIQUETAS: [string, string] = ['Serie VI · 2014', 'Serie VII · 2018'];
@@ -91,10 +91,12 @@ function paletaClases(s: UsoSuelo) {
 const km = (v: number) => (v >= 100 ? fmtInt(v) : v >= 10 ? v.toFixed(0) : v.toFixed(1));
 
 export default function CambioUso({ ctx }: AnalysisProps) {
-  const { map, data, meta } = ctx;
+  const { map, data, meta, link } = ctx;
   const [series, err] = useAsync(() => Promise.all([data.usv6(), data.usv()]), [data]);
-  const [modo, setModo] = useState<Modo>('cambios');
-  const [muni, setMuni] = useState(0);
+  const [modo, setModo] = useLinked<Modo>(link, 'vista', 'cambios', oneOf('cambios', 'comparar'));
+  const [muni, setMuni] = useLinked(link, 'mun', 0, parseMuni);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (muni) map.select(muni); }, [map]);
   const [punto, setPunto] = useState<{ a: string; b: string } | null>(null);
   const res = useMemo(() => (series ? cruzar(series[0], series[1], map.municipioGrid(), meta) : null), [series, map, meta]);
 

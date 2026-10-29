@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { RelieveHidalgo, type BaseMapId, type CloudKind, type MunicipioInfo, type ReadyInfo, type RelieveApi } from './relieve';
+import { RelieveHidalgo, decodeViewState, viewStateUrl, type MunicipioInfo, type ReadyInfo, type RelieveApi, type ViewState } from './relieve';
 import type { ReliefEngine } from './relieve/engine/Engine';
 import meta from './relieve/data/meta.json';
 
@@ -12,24 +12,23 @@ const debugHooks = import.meta.env.DEV
     }
   : {};
 
+/** La URL sigue a la vista (como en un mapa web): reemplaza la entrada del historial, no agrega una por movimiento. */
+const keepUrl = (s: ViewState) => history.replaceState(history.state, '', viewStateUrl(location.href, s));
+
 /**
- * Pantalla completa, como el artefacto. Parámetros: ?hora=19.5 · ?mapa=satelite|altitud · ?analisis=accesibilidad · ?quieto · ?embed
- * · ?nubes=auto|cumulos|nublado|niebla|tormenta|no · ?lapso (nubes en movimiento)
+ * Pantalla completa, como el artefacto. La URL guarda la vista (enlaces a vistas, shared/enlaces.ts): ?vista=lon,lat,km,
+ * inclinación,rumbo · ?mapa=satelite|altitud · ?hora=19.5 · ?exag=3 · ?nubes=auto|cumulos|nublado|niebla|tormenta|no ·
+ * ?mun=13048 · ?analisis=accesibilidad (con sus parámetros a.*). Además: ?quieto · ?embed · ?lapso (nubes en movimiento)
  */
 export function App() {
   const qs = new URLSearchParams(location.search);
   if (qs.has('embed')) return <EmbedDemo />;
-  const hour = Number(qs.get('hora'));
-  const nubes = qs.get('nubes');
-  const kind = (['auto', 'cumulos', 'nublado', 'niebla', 'tormenta'] as CloudKind[]).find(k => k === nubes);
   return (
     <RelieveHidalgo
       style={{ position: 'fixed', inset: 0, height: 'auto' }}
-      initialHour={hour >= 5 && hour <= 20.5 ? hour : undefined}
-      initialBaseMap={(['usodesuelo', 'satelite', 'altitud'] as BaseMapId[]).find(b => b === qs.get('mapa'))}
-      initialAnalysis={qs.get('analisis')}
-      initialLayers={nubes === 'no' ? { clouds: false } : undefined}
-      initialClouds={{ ...(kind ? { kind } : {}), ...(qs.has('lapso') ? { play: true } : {}) }}
+      initialView={decodeViewState(location.search)}
+      onViewChange={keepUrl}
+      initialClouds={qs.has('lapso') ? { play: true } : undefined}
       autoRotate={!qs.has('quieto')}
       {...debugHooks}
     />

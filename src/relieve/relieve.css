@@ -378,6 +378,18 @@
 .rh-a-scatter circle { stroke: #0e121a; stroke-width: 2; cursor: pointer; transition: r 0.12s; }
 .rh-a-scatter circle.on { stroke: var(--rh-fg); }
 .rh-a-axislabels { display: flex; justify-content: space-between; font-size: 0.58rem; }
+
+/* perfil de elevación */
+.rh-a-profile svg { touch-action: none; cursor: crosshair; border-radius: 4px; }
+.rh-a-profile svg:focus-visible { outline: 2px solid var(--rh-accent); outline-offset: 3px; }
+.rh-a-parea { fill: rgba(238, 241, 245, 0.07); }
+.rh-a-pline { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.rh-a-pmark line { stroke: rgba(238, 241, 245, 0.16); stroke-width: 1; }
+.rh-a-profile .rh-a-pmark text { fill: var(--rh-fg); font-weight: 500; }
+.rh-a-ptop circle { fill: var(--rh-fg); stroke: #0e121a; stroke-width: 2; }
+.rh-a-profile .rh-a-ptop text { fill: var(--rh-fg); }
+.rh-a-pcross line { stroke: rgba(238, 241, 245, 0.55); stroke-width: 1; }
+.rh-a-pcross circle { stroke: #0e121a; stroke-width: 2; }
 .rh-a-tip {
   position: absolute; transform: translate(-50%, calc(-100% - 10px)); pointer-events: none; white-space: nowrap;
   display: grid; gap: 2px; padding: 6px 9px; border-radius: 7px; background: var(--rh-surface-solid); border: 1px solid var(--rh-line); font-size: 0.76rem;

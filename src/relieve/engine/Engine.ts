@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import metaJson from '../data/meta.json';
 import { BASE_KM, makeGeo, type Geo } from '../shared/geo';
 import type { CloudSettings } from '../shared/clouds';
+import type { View } from '../shared/enlaces';
 import type { TerrainApi } from '../shared/terrain';
 import type { BuildRequest, BuildResult, DetailResult, LinesResult, Meta, TilePackInfo, WorkerMessage } from '../shared/types';
 import { ALT_STOPS_HEX } from '../worker/palette';
@@ -61,8 +62,7 @@ export interface ReadyInfo {
   timings: Record<string, number>;
 }
 
-/** Vista de la cámara: punto que mira, distancia (unidades de escena = 100 km) y ángulos en grados. */
-export interface View { lon: number; lat: number; dist: number; polar: number; az: number }
+export type { View };
 
 export interface EngineElements {
   root: HTMLElement;
@@ -99,6 +99,8 @@ export interface EngineOptions {
   onError?(message: string): void;
   onSelect?(m: MunicipioInfo | null): void;
   onGestureHint?(): void;
+  /** la cámara se detuvo tras moverse (para enlaces a vistas; mientras el mapa gira solo no se avisa) */
+  onViewChange?(): void;
   /** revisa errores de shaders (lento: espera a la GPU). Solo en desarrollo */
   debug?: boolean;
 }
@@ -230,6 +232,7 @@ export class ReliefEngine {
   private lastMove = 0;
   /** último cuadro con la cámara, las nubes o una animación en movimiento */
   private lastActive = 0;
+  private viewMoved = false;
   private ambientUntil = 0;
   private fullDpr: number;
   private dpr: number;
@@ -1532,7 +1535,7 @@ export class ReliefEngine {
 
     cam.updateMatrixWorld();
     const moved = !this.lastCam.equals(cam.matrixWorld);
-    if (moved) { this.lastCam.copy(cam.matrixWorld); this.labelsDirty = this.miniDirty = true; this.lastMove = now; }
+    if (moved) { this.lastCam.copy(cam.matrixWorld); this.labelsDirty = this.miniDirty = true; this.lastMove = now; this.viewMoved = true; }
     // parches del relieve para esta cámara
     if (moved || this.lodEx !== this.ex) this.updateLod();
     // teselas de detalle: cada ~150 ms mientras se mueve y una vez al detenerse
@@ -1573,6 +1576,7 @@ export class ReliefEngine {
     // resolución adaptable: si al moverse no alcanza ~40 cps, baja la densidad de píxeles; en reposo la recupera
     const moving = active || moved;
     if (moving) this.lastActive = now;
+    else if (this.viewMoved && intro >= 1) { this.viewMoved = false; this.opts.onViewChange?.(); }
     // al detenerse, un cuadro más con las nubes a resolución completa
     if (!moving && sky?.coarse && now - this.lastActive > 150) this.renderDirty = true;
     if (moving) {

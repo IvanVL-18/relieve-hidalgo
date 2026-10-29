@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { LinesHandle } from '../../engine/mapApi';
+import { fmtPoints, parsePoints } from '../../shared/enlaces';
 import { ROAD_CLASSES } from '../../shared/routing';
 import { SERVICE_TYPES } from '../../shared/servicios';
 import { TIME_BREAKS, TIME_LABELS, TIME_RAMP, classOf, fmtInt, fmtMin, fmtPct, hexToRgba } from '../scales';
 import type { AnalysisProps } from '../types';
-import { Bars, Chips, Facts, Loading, Note, Section, Seg, useAsync } from '../ui';
+import { Bars, Chips, Facts, Loading, Note, Section, Seg, oneOf, useAsync, useLinked } from '../ui';
 import type { Computed, RouteResult } from './router';
 
 type Sector = 'pub' | 'todos';
@@ -27,12 +28,16 @@ export function timeImage(cellMin: Uint16Array, grid: Uint8Array, W: number, H: 
 }
 
 export default function Accesibilidad({ ctx }: AnalysisProps) {
-  const { map, data, meta } = ctx;
+  const { map, data, meta, link } = ctx;
   const router = data.router();
   const [base, err] = useAsync(() => Promise.all([router.ready, data.servicios(), data.localidades()]), [router]);
-  const [tipo, setTipo] = useState('hospital');
-  const [sector, setSector] = useState<Sector>('pub');
-  const [modo, setModo] = useState<Modo>('cercano');
+  const [tipo, setTipo] = useLinked(link, 'servicio', 'hospital', oneOf(...SERVICE_TYPES.map(s => s.id)));
+  const [sector, setSector] = useLinked<Sector>(link, 'sector', 'pub', oneOf('pub', 'todos'));
+  const [modo, setModo] = useLinked<Modo>(link, 'modo', 'cercano', oneOf('cercano', 'ab'));
+  // puntos de la ruta mostrada (para el enlace); los de un enlace se trazan cuando están los tiempos
+  const [rutaPts, setRutaPts] = useState<[number, number][] | null>(null);
+  const linkRuta = useRef(parsePoints(link.initial.ruta ?? '', 2));
+  useEffect(() => link.set('ruta', rutaPts ? fmtPoints(rutaPts) : linkRuta.current ? fmtPoints(linkRuta.current) : null), [link, rutaPts]);
   const [roadsOn, setRoadsOn] = useState(true);
   const [timesOn, setTimesOn] = useState(true);
   const [res, setRes] = useState<Computed | null>(null);
@@ -84,11 +89,19 @@ export default function Accesibilidad({ ctx }: AnalysisProps) {
   useEffect(() => {
     if (!srv || !loc || !ready) return;
     let alive = true;
-    setBusy(true); setRoute(null);
+    setBusy(true); setRoute(null); setRutaPts(null);
     router.compute(`${tipo}:${sector}`, Float32Array.from(chosen, i => srv.lon[i]), Float32Array.from(chosen, i => srv.lat[i]), loc.lon, loc.lat)
       .then(r => { if (alive) { setRes(r); setBusy(false); } }, () => alive && setBusy(false));
     return () => { alive = false; };
   }, [router, srv, loc, ready, chosen, tipo, sector]);
+
+  useEffect(() => {
+    const p = linkRuta.current;
+    if (!res || !p) return;
+    linkRuta.current = undefined;
+    if (p.length === 1 && modo === 'cercano') router.route(p[0][0], p[0][1]).then(r => { setRoute(r); if (r) setRutaPts(p); });
+    else if (p.length === 2 && modo === 'ab') router.routeAB(p[0], p[1]).then(r => { setRoute(r); if (r) setRutaPts(p); });
+  }, [res, router, modo]);
 
   useEffect(() => { map.setOverlay(res && timesOn ? timeImage(res.cellMin, map.municipioGrid(), meta.W, meta.H) : null, 0.82); }, [map, res, timesOn, meta]);
 
@@ -103,11 +116,12 @@ export default function Accesibilidad({ ctx }: AnalysisProps) {
   useEffect(() => map.onClick(hit => {
     setRouteErr('');
     if (modo === 'cercano') {
-      router.route(hit.lon, hit.lat).then(r => { setRoute(r); if (!r) setRouteErr('No hay camino desde ese punto.'); });
+      router.route(hit.lon, hit.lat).then(r => { setRoute(r); setRutaPts(r ? [[hit.lon, hit.lat]] : null); if (!r) setRouteErr('No hay camino desde ese punto.'); });
       return true;
     }
     if (!abA) { setAbA([hit.lon, hit.lat]); setRoute(null); map.setPin('A', hit.lon, hit.lat); return true; }
-    router.routeAB(abA, [hit.lon, hit.lat]).then(r => { setRoute(r); if (!r) setRouteErr('No hay camino entre esos puntos.'); });
+    const a = abA;
+    router.routeAB(a, [hit.lon, hit.lat]).then(r => { setRoute(r); setRutaPts(r ? [a, [hit.lon, hit.lat]] : null); if (!r) setRouteErr('No hay camino entre esos puntos.'); });
     setAbA(null);
     return true;
   }), [map, router, modo, abA]);
@@ -145,7 +159,7 @@ export default function Accesibilidad({ ctx }: AnalysisProps) {
       </Section>
 
       <Section title="Ruta" aside={busy ? <span className="rh-mono">calculando…</span> : undefined}>
-        <Seg label="Modo de ruta" value={modo} onChange={v => { setModo(v); setAbA(null); setRoute(null); map.setPin(null); }} options={[['cercano', 'Al servicio más cercano'], ['ab', 'Entre dos puntos']]} />
+        <Seg label="Modo de ruta" value={modo} onChange={v => { setModo(v); setAbA(null); setRoute(null); setRutaPts(null); map.setPin(null); }} options={[['cercano', 'Al servicio más cercano'], ['ab', 'Entre dos puntos']]} />
         {!route && !routeErr && <Note>{modo === 'cercano' ? 'Haz clic en cualquier punto del mapa.' : abA ? 'Ahora haz clic en el destino.' : 'Haz clic en el origen y luego en el destino.'}</Note>}
         {routeErr && <Note>{routeErr}</Note>}
         {route && (

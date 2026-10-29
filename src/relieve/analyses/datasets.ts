@@ -32,6 +32,16 @@ export interface Localidades {
   nombre: string[];
 }
 
+/** Clave de una localidad sin el estado («0480001» = municipio 048, localidad 0001), estable entre versiones de los datos. */
+export const locKey = (l: Localidades, i: number) => String(l.muni[i]).padStart(3, '0') + String(l.loc[i]).padStart(4, '0');
+export function locIndex(l: Localidades, key: string) {
+  const m = /^(\d{3})(\d{4})$/.exec(key);
+  if (!m) return -1;
+  const mu = Number(m[1]), lo = Number(m[2]);
+  for (let i = 0; i < l.n; i++) if (l.muni[i] === mu && l.loc[i] === lo) return i;
+  return -1;
+}
+
 /**
  * Lugares extra para el buscador: localidades del catálogo de INEGI que no están en el ITER (deshabitadas o de 1–2
  * viviendas) y asentamientos (colonias, fraccionamientos, barrios…) de las direcciones del DENUE.

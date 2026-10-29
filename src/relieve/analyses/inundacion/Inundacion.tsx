@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RasterHandle } from '../../engine/mapApi';
+import { fmtPoints, parsePoints } from '../../shared/enlaces';
 import { makeGeo } from '../../shared/geo';
 import { SERVICE_TYPES } from '../../shared/servicios';
 import type { Flood } from '../../shared/terrain';
@@ -9,7 +10,7 @@ import type { RoadLines } from '../accesibilidad/router';
 import type { Localidades, Servicios, UsoSuelo } from '../datasets';
 import { DEPTH_RAMP, fmtInt } from '../scales';
 import type { AnalysisProps } from '../types';
-import { Chips, ClassLegend, Facts, Loading, Note, Section, Seg, Stats, useAsync } from '../ui';
+import { Chips, ClassLegend, Facts, Loading, Note, Section, Seg, Stats, oneOf, useAsync, useLinked } from '../ui';
 
 type Modo = 'rio' | 'valle';
 const AGUA = USV_GROUPS.findIndex(g => g.id === 'agua');
@@ -90,12 +91,16 @@ function evaluar(fl: Flood, h: number, meta: Meta, loc: Localidades, srv: Servic
 const fmt1 = (v: number) => (v >= 100 ? fmtInt(v) : v > 0 && v < 0.1 ? '< 0.1' : v.toFixed(1));
 
 export default function Inundacion({ ctx }: AnalysisProps) {
-  const { map, data, meta } = ctx;
+  const { map, data, meta, link } = ctx;
   const [base, baseErr] = useAsync(() => Promise.all([data.localidades(), data.servicios(), data.usv()]), [data]);
-  const [modo, setModo] = useState<Modo>('rio');
-  const [pick, setPick] = useState<{ lon: number; lat: number; modo: Modo; fly: boolean } | null>(null);
+  const [modo, setModo] = useLinked<Modo>(link, 'modo', 'rio', oneOf('rio', 'valle'));
+  const [pick, setPick] = useState<{ lon: number; lat: number; modo: Modo; fly: boolean } | null>(() => {
+    const p = parsePoints(link.initial.punto ?? '', 1);
+    return p ? { lon: p[0][0], lat: p[0][1], modo: link.initial.modo === 'valle' ? 'valle' : 'rio', fly: false } : null;
+  });
+  useEffect(() => link.set('punto', pick ? fmtPoints([[pick.lon, pick.lat]]) : null), [link, pick]);
   const [fl, setFl] = useState<Flood | null>(null);
-  const [h, setH] = useState(3);
+  const [h, setH] = useLinked(link, 'h', 3, s => { const v = Number(s); return v >= 0.25 && v <= 30 ? v : undefined; });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [vias, setVias] = useState<RoadLines | null>(null);

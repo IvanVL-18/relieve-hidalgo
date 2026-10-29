@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import type { AnalysisLink } from './types';
 
 /** Piezas comunes de los paneles de análisis. Estilos en relieve.css (prefijo rh-a-). */
 
@@ -74,6 +75,35 @@ export function Note({ children }: { children: ReactNode }) { return <p classNam
 
 export function Loading({ text = 'Cargando datos…' }: { text?: string }) {
   return <div className="rh-a-loading"><span className="rh-spinner" aria-hidden="true" />{text}</div>;
+}
+
+/**
+ * Estado que viaja en los enlaces a vistas: arranca con el valor del enlace (si parse lo acepta) y avisa cada cambio.
+ * El valor por omisión no se escribe en el enlace.
+ */
+export function useLinked<T>(link: AnalysisLink, key: string, init: T, parse: (s: string) => T | undefined, format: (v: T) => string = String): [T, Dispatch<SetStateAction<T>>] {
+  const [v, set] = useState<T>(() => {
+    const s = link.initial[key];
+    const p = s === undefined ? undefined : parse(s);
+    return p === undefined ? init : p;
+  });
+  const def = useRef(format(init)).current;
+  useEffect(() => { const s = format(v); link.set(key, s === def ? null : s); }, [link, key, v, def, format]);
+  return [v, set];
+}
+
+/** Para useLinked con opciones fijas: acepta solo las de la lista. */
+export const oneOf = <T extends string>(...opts: T[]) => (s: string) => (opts.includes(s as T) ? (s as T) : undefined);
+/** Para useLinked con municipios (1–84; 0 = todo el estado). */
+export const parseMuni = (s: string) => { const n = Number(s); return Number.isInteger(n) && n >= 0 && n <= 84 ? n : undefined; };
+
+/** Descarga un archivo generado en el navegador. */
+export function saveBlob(blob: Blob, name: string) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
 /** Carga asíncrona con estado: [dato, error]. */

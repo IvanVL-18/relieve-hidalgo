@@ -6,20 +6,35 @@ import { GRADOS } from '../datasets';
 import { SIZE_BREAKS, SIZE_LABELS } from '../poblacion/Poblacion';
 import { MARG_RAMP, POP_RAMP, TIME_BREAKS, TIME_LABELS, TIME_RAMP, classOf, fmtInt, fmtMin, hexToRgba } from '../scales';
 import type { AnalysisProps } from '../types';
-import { Bars, Chips, ClassLegend, Facts, Loading, Note, Section, Seg, useAsync } from '../ui';
+import { Bars, Chips, ClassLegend, Facts, Loading, Note, Section, Seg, oneOf, parseMuni, useAsync, useLinked } from '../ui';
+import { locIndex, locKey } from '../datasets';
 
 type ColorBy = 'tamano' | 'marginacion' | 'hospital';
 const NO_DATA = '#5a5f6b';
 const SIZE_IDS = ['0', '1', '2', '3', '4'];
 
 export default function Localidades({ ctx }: AnalysisProps) {
-  const { map, data } = ctx;
+  const { map, data, link } = ctx;
   const [loc, err] = useAsync(() => data.localidades(), []);
-  const [sizes, setSizes] = useState(() => new Set(SIZE_IDS));
-  const [colorBy, setColorBy] = useState<ColorBy>('tamano');
-  const [muni, setMuni] = useState(0);
-  const [onlyMuni, setOnlyMuni] = useState(false);
+  const [sizes, setSizes] = useLinked(link, 'tam', new Set(SIZE_IDS),
+    s => new Set(s.split(',').filter(v => SIZE_IDS.includes(v))), v => SIZE_IDS.filter(k => v.has(k)).join(','));
+  const [colorBy, setColorBy] = useLinked<ColorBy>(link, 'color', 'tamano', oneOf('tamano', 'marginacion', 'hospital'));
+  const [muni, setMuni] = useLinked(link, 'mun', 0, parseMuni);
+  const [onlyMuni, setOnlyMuni] = useLinked(link, 'solo', false, s => s === '1', v => (v ? '1' : '0'));
   const [sel, setSel] = useState(-1);
+  // localidad de un enlace: se busca cuando llegan los datos
+  const linkLoc = useRef<string | undefined>(link.initial.loc);
+  useEffect(() => {
+    if (muni && !linkLoc.current) map.select(muni);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map]);
+  useEffect(() => {
+    if (!loc || !linkLoc.current) return;
+    const i = locIndex(loc, linkLoc.current);
+    linkLoc.current = undefined;
+    if (i >= 0) { setSel(i); setMuni(loc.muni[i]); map.setPin(loc.nombre[i], loc.lon[i], loc.lat[i]); }
+  }, [map, loc, setMuni]);
+  useEffect(() => link.set('loc', sel >= 0 && loc ? locKey(loc, sel) : linkLoc.current ?? null), [link, sel, loc]);
   const [q, setQ] = useState('');
   const [times, setTimes] = useState<{ hospital?: Float32Array; salud?: Float32Array; error?: string }>({});
   const dots = useRef<PointsHandle | null>(null);

@@ -6,7 +6,7 @@ import type { RoadLines } from '../accesibilidad/router';
 import type { Laderas as LaderasData, Localidades } from '../datasets';
 import { fmtInt, hexToRgba } from '../scales';
 import type { AnalysisProps } from '../types';
-import { Bars, Chips, ClassLegend, Facts, Loading, Note, Section, Seg, useAsync } from '../ui';
+import { Bars, Chips, ClassLegend, Facts, Loading, Note, Section, Seg, oneOf, parseMuni, useAsync, useLinked } from '../ui';
 
 type Vista = 'indice' | 'atlas' | 'comparar' | 'pendiente' | 'lluvia' | 'roca' | 'cobertura';
 
@@ -119,13 +119,16 @@ const km = (v: number) => (v >= 100 ? fmtInt(v) : v.toFixed(1));
 const pc = (a: number, b: number) => `${((100 * a) / Math.max(1e-9, b)).toFixed(0)} %`;
 
 export default function Laderas({ ctx }: AnalysisProps) {
-  const { map, data, meta } = ctx;
+  const { map, data, meta, link } = ctx;
   const [base, err] = useAsync(() => Promise.all([data.laderas(), data.localidades()]), [data]);
-  const [muni, setMuni] = useState(0);
-  const [vista, setVista] = useState<Vista>('indice');
-  const [solo, setSolo] = useState(false);
-  const [eventosOn, setEventosOn] = useState(true);
-  const [zonasOn, setZonasOn] = useState(false);
+  const [muni, setMuni] = useLinked(link, 'mun', 0, parseMuni);
+  const [vista, setVista] = useLinked<Vista>(link, 'vista', 'indice', oneOf('indice', 'atlas', 'comparar', 'pendiente', 'lluvia', 'roca', 'cobertura'));
+  const [solo, setSolo] = useLinked(link, 'solo', false, s => s === '1', v => (v ? '1' : '0'));
+  const [eventosOn, setEventosOn] = useLinked(link, 'eventos', true, s => s === '1', v => (v ? '1' : '0'));
+  const [zonasOn, setZonasOn] = useLinked(link, 'zonas', false, s => s === '1', v => (v ? '1' : '0'));
+  // municipio de un enlace: se selecciona al abrir
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (muni) map.select(muni); }, [map]);
   const [vias, setVias] = useState<Float64Array | null>(null);
   const res = useMemo(() => (base ? resumir(base[0], base[1], map.municipioGrid(), meta) : null), [base, map, meta]);
   const val = useMemo(() => (base && res ? validar(base[0], meta, res) : null), [base, res, meta]);

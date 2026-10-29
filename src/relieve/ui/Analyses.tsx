@@ -1,7 +1,7 @@
-import { Component, Suspense, lazy, useEffect, useState, type ComponentType, type ErrorInfo, type LazyExoticComponent, type ReactNode } from 'react';
+import { Component, Suspense, lazy, useEffect, useRef, useState, type ComponentType, type ErrorInfo, type LazyExoticComponent, type ReactNode } from 'react';
 import type { Datasets } from '../analyses/datasets';
 import { ANALYSES, GROUP_ORDER } from '../analyses/registry';
-import type { AnalysisContext, AnalysisDef, AnalysisProps } from '../analyses/types';
+import type { AnalysisContext, AnalysisDef, AnalysisLink, AnalysisProps } from '../analyses/types';
 import { Loading } from '../analyses/ui';
 import type { ReliefEngine } from '../engine/Engine';
 import { IconClose } from './icons';
@@ -59,14 +59,40 @@ export function AnalysisMenu({ active, onPick, onClose }: { active: string | nul
   );
 }
 
-/** Panel del análisis activo. Crea su mapa con ámbito y lo limpia al cerrar o cambiar de análisis. */
-export function AnalysisPanel({ id, engine, datasets, small, onClose }: { id: string; engine: ReliefEngine; datasets: Datasets; small: boolean; onClose: () => void }) {
+/**
+ * Panel del análisis activo. Crea su mapa con ámbito y lo limpia al cerrar o cambiar de análisis. initialParams: el
+ * estado que traía un enlace (solo para el análisis con el que se abrió); onParams avisa el estado actual.
+ */
+export function AnalysisPanel({ id, engine, datasets, small, onClose, initialParams, onParams }: {
+  id: string; engine: ReliefEngine; datasets: Datasets; small: boolean; onClose: () => void;
+  initialParams?: Record<string, string> | null; onParams?: (params: Record<string, string>) => void;
+}) {
   const def = ANALYSES.find(a => a.id === id)!;
   const [ctx, setCtx] = useState<AnalysisContext | null>(null);
+  // el estado sobrevive si el análisis se vuelve a montar (p. ej. al cambiar a pantalla chica)
+  const params = useRef<{ id: string; values: Record<string, string>; initial: Record<string, string>; reported: boolean } | null>(null);
+  const notify = useRef(onParams);
+  notify.current = onParams;
   useEffect(() => {
+    // al volver a montar (también el doble efecto de StrictMode), lo último que avisó el análisis; si aún no avisó nada, lo del enlace
+    if (params.current?.id !== id) params.current = { id, values: {}, initial: { ...(initialParams ?? {}) }, reported: false };
+    else if (params.current.reported) params.current.initial = { ...params.current.values };
+    const st = params.current;
+    const link: AnalysisLink = {
+      initial: st.initial,
+      set: (k, v) => {
+        st.reported = true;
+        if (v === null ? !(k in st.values) : st.values[k] === v) return;
+        if (v === null) delete st.values[k]; else st.values[k] = v;
+        notify.current?.({ ...st.values });
+      },
+    };
+    notify.current?.({ ...st.values });
     const map = engine.createScope();
-    setCtx({ map, data: datasets, meta: map.meta, small });
+    setCtx({ map, data: datasets, meta: map.meta, small, link });
     return () => { map.dispose(); engine.select(0); setCtx(null); };
+    // initialParams solo cuenta al abrir el análisis
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, datasets, id, small]);
   const Comp = componentFor(def);
   return (

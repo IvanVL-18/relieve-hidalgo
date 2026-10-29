@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { GRADOS, type Localidades, type Municipio } from '../datasets';
 import { BIVARIATE, MARG_RAMP, classOf, fmtInt, fmtPct, quantileBreaks, spearman } from '../scales';
 import type { AnalysisProps } from '../types';
-import { Facts, Loading, Note, Section, Seg, useAsync } from '../ui';
+import { Facts, Loading, Note, Section, Seg, oneOf, parseMuni, useAsync, useLinked } from '../ui';
 
 type Relieve = 'pendiente' | 'pct_pend_15';
 const RELIEVE: Record<Relieve, { label: string; unit: (v: number) => string }> = {
@@ -14,10 +14,12 @@ const marg = (m: Municipio) => -(m.im ?? NaN);
 const strength = (r: number) => (Math.abs(r) < 0.2 ? 'muy débil' : Math.abs(r) < 0.4 ? 'débil' : Math.abs(r) < 0.6 ? 'moderada' : 'fuerte');
 
 export default function Marginacion({ ctx }: AnalysisProps) {
-  const { map, data } = ctx;
+  const { map, data, link } = ctx;
   const [all, err] = useAsync(() => Promise.all([data.municipios(), data.localidades()]), []);
-  const [rel, setRel] = useState<Relieve>('pendiente');
-  const [sel, setSel] = useState(0);
+  const [rel, setRel] = useLinked<Relieve>(link, 'medida', 'pendiente', oneOf('pendiente', 'pct_pend_15'));
+  const [sel, setSel] = useLinked(link, 'mun', 0, parseMuni);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (sel) map.select(sel); }, [map]);
   const [hover, setHover] = useState(0);
   const mun = all?.[0], loc = all?.[1];
 

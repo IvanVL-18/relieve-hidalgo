@@ -6,6 +6,7 @@ export const IconPlus = () => <svg {...S}><path d="M12 5v14M5 12h14" /></svg>;
 export const IconMinus = () => <svg {...S}><path d="M5 12h14" /></svg>;
 export const IconChevron = () => <svg {...S}><path d="M6 9l6 6 6-6" /></svg>;
 export const IconClose = () => <svg {...S}><path d="M6 6l12 12M18 6L6 18" /></svg>;
+export const IconLink = () => <svg {...S}><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.4 1.4" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.4-1.4" /></svg>;
 export const IconCamera = () => <svg {...S}><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg>;
 export const IconExpand = () => <svg {...S}><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>;
 export const IconShrink = () => <svg {...S}><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>;

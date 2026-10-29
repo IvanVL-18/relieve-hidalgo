@@ -54,7 +54,12 @@ export const ANALYSES: AnalysisDef[] = [
     fuentes: ['INEGI, Uso del suelo y vegetación 1:250 000, Series VI y VII (vía IDEFOR, CONAFOR)'],
     load: () => import('./cambio-uso/CambioUso'),
   },
-  { id: 'perfil', titulo: 'Perfil de elevación', grupo: 'Planeación', resumen: 'Corte del terreno entre dos puntos o a lo largo de una carretera.' },
+  {
+    id: 'perfil', titulo: 'Perfil de elevación', grupo: 'Planeación',
+    resumen: 'Corte del terreno entre dos o más puntos, o a lo largo de una carretera: subida, bajada, pendientes y punto más alto.',
+    fuentes: ['Relieve: INEGI, Continental relief 2016 (30 m), vía Terrain Tiles', 'Red vial: © colaboradores de OpenStreetMap (ODbL)', 'Municipios: INEGI, Marco Geoestadístico 2022'],
+    load: () => import('./perfil/Perfil'),
+  },
   { id: 'antenas', titulo: 'Cobertura de antenas', grupo: 'Planeación', resumen: 'Qué localidades ve una torre desde un cerro.' },
   { id: 'solar', titulo: 'Potencial solar', grupo: 'Planeación', resumen: 'Radiación anual según la orientación del terreno.' },
   { id: 'movilidad', titulo: 'Movilidad', grupo: 'Planeación', resumen: 'Arcos 3D de traslados al trabajo entre municipios.' },
@@ -64,7 +69,6 @@ export const ANALYSES: AnalysisDef[] = [
   { id: 'impresion', titulo: 'Impresión 3D', grupo: 'Difusión', resumen: 'Modelo STL para maquetas y mapas táctiles.' },
   { id: 'escuelas', titulo: 'Modo escuelas', grupo: 'Difusión', resumen: 'Regiones, ríos y climas explicados.' },
   { id: 'preguntas', titulo: 'Preguntas en lenguaje natural', grupo: 'Plataforma', resumen: '«Municipios arriba de 2 500 m con más de 30 % de pobreza».' },
-  { id: 'enlaces', titulo: 'Enlaces a vistas', grupo: 'Plataforma', resumen: 'Compartir un municipio o un ángulo exacto.' },
 ];
 
 export const GROUP_ORDER: AnalysisGroup[] = ['Población', 'Desigualdad', 'Servicios', 'Agua y riesgo', 'Planeación', 'Difusión', 'Plataforma'];
