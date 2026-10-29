@@ -11,7 +11,14 @@ export const OUT = path.join(ROOT, 'data-src/out');            // tablas normali
 export const LAYERS = path.join(ROOT, 'src/relieve/data/capas'); // archivos que carga el visor
 for (const d of [CACHE, OUT, LAYERS]) fs.mkdirSync(d, { recursive: true });
 
-export const META = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/relieve/data/meta.json'), 'utf8'));
+/**
+ * Rejilla del visor: centros de celda de 0.0025° (≈ 270 m) con 3 celdas de margen alrededor del estado.
+ * Todas las capas se alinean a ella; cambiarla obliga a regenerar todo con npm run data.
+ */
+export const GRID = { W: 756, H: 726, step: 0.0025, lon0: -99.86625, lat0: 21.40375 };
+const metaFile = path.join(ROOT, 'src/relieve/data/meta.json');
+/** meta.json lo genera build-relieve.mjs; antes de la primera corrida se usa GRID. */
+export const META = fs.existsSync(metaFile) ? JSON.parse(fs.readFileSync(metaFile, 'utf8')) : { ...GRID };
 export const { W, H, step: STEP, lon0: LON0, lat0: LAT0 } = META;
 export const colOf = lon => (lon - LON0) / STEP;
 export const rowOf = lat => (LAT0 - lat) / STEP;
@@ -77,6 +84,9 @@ export function decodeText(buf) {
   return utf.includes('�') ? new TextDecoder('latin1').decode(buf) : utf;
 }
 
+/** Renglones del ITER (CSV dentro del zip de INEGI). */
+export const readIter = file => parseCSV(decodeText(Object.values(unzip(file, n => /conjunto_de_datos_iter.*\.csv$/i.test(n)))[0]));
+
 export const writeJSON = (file, data) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(data)); };
 export const readJSON = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 export const writeGz = (file, buf) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, zlib.gzipSync(buf, { level: 9 })); return fs.statSync(file).size; };
@@ -94,6 +104,30 @@ export class BinWriter {
   u8(a) { this.push(Buffer.from(Uint8Array.from(a).buffer)); }
   str(list) { const b = Buffer.from(list.join('\n'), 'utf8'); this.u32([b.length]); this.push(b); }
   buffer() { return Buffer.concat(this.parts); }
+}
+
+/**
+ * Paquete de teselas (RHP1): un solo archivo que el visor lee por partes con peticiones Range (si el servidor no
+ * las acepta, lo descarga completo una vez). Teselas cuadradas de `tileCells` celdas de la rejilla del visor.
+ *   u32 'RHP1' · u32 versión (1) · u32 tipo (1 = relieve, 2 = imagen WebP) · u32 tileCells · u32 nx · u32 ny
+ *   · u32 muestras por lado · u32 factor (rejilla fina) · nx·ny × (u32 inicio, u32 largo; largo 0 = sin tesela) · datos
+ * tiles: Map de índice (ty·nx + tx) → Buffer.
+ */
+export const PACK_MAGIC = 0x31504852;
+export function writePack(file, { kind, tileCells, nx, ny, px, f = 1 }, tiles) {
+  const head = Buffer.alloc(32 + nx * ny * 8);
+  [PACK_MAGIC, 1, kind, tileCells, nx, ny, px, f].forEach((v, k) => head.writeUInt32LE(v, k * 4));
+  const parts = [head];
+  let o = head.length, bytes = 0;
+  for (let i = 0; i < nx * ny; i++) {
+    const b = tiles.get(i);
+    if (!b?.length) continue;
+    head.writeUInt32LE(o, 32 + i * 8); head.writeUInt32LE(b.length, 36 + i * 8);
+    parts.push(b); o += b.length; bytes += b.length;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, Buffer.concat(parts));
+  return { size: o, tiles: tiles.size, mean: tiles.size ? bytes / tiles.size : 0 };
 }
 
 /** Grados, minutos y segundos de INEGI («98°43'50.123" W») a decimal. */

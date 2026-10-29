@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Uso del suelo y vegetación (INEGI Serie VII) → rejilla de clases al doble de resolución del relieve (≈125 m).
+ * Uso del suelo y vegetación (INEGI Serie VII) → rejilla de clases a 4 veces la resolución del relieve (≈ 65 m). El visor
+ * dibuja los bordes entre clases suavizados (sin escalones), así que la orilla sigue al polígono con ~30 m de error.
  *   capas/usv.bin   gzip: u32 'RHU1' · u32 w · u32 h · u8 clase[w·h] (0 = sin dato)
  *   capas/usv.json  clases [{ clave, nombre, grupo, sec }]
  *   out/usv_municipios.json  % de cada grupo por municipio · out/usv_poligonos.json  polígonos para la base de datos
@@ -13,7 +14,7 @@ import { SOURCES } from './sources.mjs';
 import { USV_GROUPS, usvGroupOf } from '../../src/relieve/shared/usv.ts';
 
 const geo = JSON.parse(fs.readFileSync(path.join(CACHE, SOURCES.usv.file), 'utf8'));
-const S = 2, w = (W - 1) * S, h = (H - 1) * S;
+const S = 4, w = (W - 1) * S, h = (H - 1) * S;
 const sentence = s => s.charAt(0) + s.slice(1).toLowerCase().replace(/\bvegetacion\b/g, 'vegetación');
 
 // clases por frecuencia (índice 1…n; 0 = sin dato)

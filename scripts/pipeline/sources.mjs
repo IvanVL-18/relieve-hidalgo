@@ -15,8 +15,17 @@ export const SOURCES = {
     file: 'usv/usv250s7_hidalgo.geojson', fuente: 'INEGI, Uso del suelo y vegetación 1:250 000 Serie VII (vía IDEFOR, CONAFOR)', licencia: 'Términos de libre uso de la información del INEGI',
   },
   vias: { url: 'overpass', file: 'osm/vias_hidalgo.json', fuente: 'OpenStreetMap (Overpass API)', licencia: 'ODbL 1.0 © colaboradores de OpenStreetMap' },
+  agua: { url: 'overpass', file: 'osm/agua_hidalgo.json', fuente: 'OpenStreetMap (Overpass API): ríos, presas y lagos', licencia: 'ODbL 1.0 © colaboradores de OpenStreetMap' },
+  relieve: {
+    url: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png', file: 'terrain/',
+    fuente: 'Terrain Tiles (AWS Open Data, Mapzen/Tilezen): en México, INEGI, Continental relief, 2016; SRTM y GMTED2010 cortesía del USGS',
+    licencia: 'Términos de libre uso de la información del INEGI; USGS: dominio público',
+  },
   satelite: { url: 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg', file: 's2/', fuente: 'Sentinel-2 cloudless 2016 — https://s2maps.eu, EOX IT Services GmbH (contiene datos modificados de Copernicus Sentinel 2016)', licencia: 'CC BY 4.0' },
 };
+
+/** Atribución del relieve tal como la piden Terrain Tiles (INEGI para México) y el USGS. */
+export const RELIEF_CREDIT = 'INEGI, Continental relief 2016, y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS Open Data)';
 
 /** Teselas Web Mercator z12 que cubren la rejilla (≈ 36 m por píxel). */
 export function tileRange(z) {

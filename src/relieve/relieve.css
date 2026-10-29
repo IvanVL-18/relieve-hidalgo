@@ -60,7 +60,7 @@
 .rh-mono b { color: var(--rh-fg); font-weight: 500; }
 
 /* superficies de vidrio */
-.rh-search input, .rh-rail button, .rh-panel, .rh-mini, .rh-card, .rh-tag, .rh-hint {
+.rh-search input, .rh-rail button, .rh-panel, .rh-mini, .rh-card, .rh-tag, .rh-hint, .rh-legend {
   background: var(--rh-surface); border: 1px solid var(--rh-line);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
 }
@@ -103,7 +103,7 @@
 .rh-text-btn { justify-self: start; color: var(--rh-accent); padding: 6px 8px; margin-left: -8px; }
 
 /* leyenda y navegación */
-.rh-legend { display: flex; flex-direction: column; gap: 6px; width: 200px; pointer-events: none; }
+.rh-legend { display: flex; flex-direction: column; gap: 6px; width: 200px; padding: 10px 12px; border-radius: 12px; pointer-events: none; }
 .rh-bar { height: 8px; border-radius: 2px; }
 .rh-ticks { display: flex; justify-content: space-between; }
 .rh-key { list-style: none; display: grid; gap: 4px; font-size: 0.74rem; color: var(--rh-fg); }
@@ -174,6 +174,27 @@
 
 /* etiquetas del relieve (las crea el motor) */
 .rh-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 1; }
+
+/* cortina para comparar dos capas o mapas base (MapApi.compare) */
+.rh-curtain { position: absolute; top: 0; bottom: 0; width: 0; z-index: 1; pointer-events: none; }
+.rh-curtain::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px;
+  background: var(--rh-accent); box-shadow: 0 0 0 1px rgba(6, 8, 13, 0.35);
+}
+.rh-curtain-h {
+  position: absolute; top: 50%; left: 0; width: 38px; height: 38px; transform: translate(-50%, -50%);
+  display: grid; place-items: center; padding: 0; border-radius: 50%; cursor: ew-resize; pointer-events: auto; touch-action: none;
+  appearance: none; border: 1px solid var(--rh-line); background: var(--rh-surface-solid); color: var(--rh-accent);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.rh-curtain-h svg { width: 18px; height: 18px; }
+.rh-curtain-h:focus-visible { outline: 2px solid var(--rh-accent); outline-offset: 2px; }
+.rh-curtain-l, .rh-curtain-r {
+  position: absolute; top: 50%; transform: translateY(calc(-50% - 36px)); white-space: nowrap;
+  padding: 4px 8px; border-radius: 7px; background: var(--rh-surface); color: var(--rh-fg); border: 1px solid var(--rh-line);
+}
+.rh-curtain-l { right: 10px; }
+.rh-curtain-r { left: 10px; }
 .rh-lbl {
   position: absolute; left: 0; top: 0; display: none; align-items: center; gap: 6px;
   font-size: 0.74rem; color: var(--rh-fg); white-space: nowrap; will-change: transform;

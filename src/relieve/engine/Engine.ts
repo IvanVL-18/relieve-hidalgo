@@ -2,19 +2,26 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import metaJson from '../data/meta.json';
 import { BASE_KM, makeGeo, type Geo } from '../shared/geo';
-import type { BuildRequest, BuildResult, Meta, MuniStats, WorkerMessage } from '../shared/types';
-import { Heightfield, type Hit } from './heightfield';
+import type { TerrainApi } from '../shared/terrain';
+import type { BuildRequest, BuildResult, DetailResult, LinesResult, Meta, TilePackInfo, WorkerMessage } from '../shared/types';
+import { ALT_STOPS_HEX } from '../worker/palette';
+import { Heightfield, type Hit, type Tiles30 } from './heightfield';
+import { heightDefines, makeHeightUniforms, type HeightUniforms } from './heights';
 import { Labels } from './labels';
 import {
-  createNightPointsMaterial, createTerrainMaterial, createWallMaterial,
+  PALETTE_ROW, blankTexture, createCasterDepthMaterial, createNightPointsMaterial, createTerrainMaterial, createWallDepthMaterial, createWallMaterial,
   makeSharedUniforms, makeTerrainUniforms, type SharedUniforms, type TerrainUniforms,
 } from './materials';
 import { BASE_MAPS, loadBaseMap, type BaseMapId, type LoadedBaseMap } from './basemaps';
-import type { GridImage, MapApi, MapHit } from './mapApi';
+import type { CompareHandle, CompareSpec, GridImage, MapApi, MapHit } from './mapApi';
 import { Minimap } from './minimap';
-import { Overlays, type LinesHandle, type PointsHandle } from './overlays';
+import { Overlays } from './overlays';
+import { Curtain, Rasters, makePalette, type RasterHandle } from './rasters';
 import { buildIndex, prettyRiver, search, type SearchItem } from './search';
 import { mexicoDate, sunPosition, sunTimes, todayInMexico } from './sun';
+import { TerrainLod } from './terrain';
+import { TerrainService } from './terrainService';
+import { TileSet } from './tiles';
 
 export const meta = metaJson as unknown as Meta;
 
@@ -33,18 +40,27 @@ export interface MunicipioInfo {
   minElev: number;
   maxElev: number;
   meanElev: number;
+  /** superficie del polígono INEGI */
   areaKm2: number;
-  /** localidades del catálogo del visor dentro del municipio */
+  /** localidades con nombre en el mapa (etiquetas) */
   places: number;
+  /** localidades del Censo 2020 (ITER) */
+  localidades: number;
+  /** habitantes, Censo 2020 */
+  poblacion: number;
 }
 
 export interface ReadyInfo {
+  /** extremos del estado medidos a 30 m */
   minElev: number;
   maxElev: number;
   sunrise: number;
   sunset: number;
   timings: Record<string, number>;
 }
+
+/** Vista de la cámara: punto que mira, distancia (unidades de escena = 100 km) y ángulos en grados. */
+export interface View { lon: number; lat: number; dist: number; polar: number; az: number }
 
 export interface EngineElements {
   root: HTMLElement;
@@ -64,7 +80,7 @@ export interface EngineElements {
 }
 
 export interface EngineOptions {
-  /** carpeta con elev.bin, muni.bin y vec.bin si se sirven desde otro lugar (CDN, Laravel /public…) */
+  /** carpeta con los archivos de data/ si se sirven desde otro lugar (CDN, Laravel /public…) */
   dataBaseUrl?: string;
   quality?: 'auto' | 'high' | 'low';
   exaggeration: number;
@@ -85,10 +101,24 @@ export interface EngineOptions {
 
 const UNIT = 0.01;   // 1 unidad de escena = 100 km
 const ACCENT = '#ffcf7a';
+/** relieve fino: 90 m entero hasta 60 km de la cámara y nada desde 100; 30 m entero hasta 14 km y nada desde 24 */
+const LOD_BLEND = [60, 100, 14, 24] as const;
+/** atlas de teselas: 14 × 14 ranuras de relieve de 30 m (145 nodos) y 8 × 8 de imagen (256 px) */
+const DEM_SLOTS = 14, SAT_SLOTS = 8;
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const smooth = (a: number, b: number, x: number) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const easeIO = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const fmt = (n: number) => Math.round(n).toLocaleString('es-MX').replace(/,/g, ' ');
+/** Tras subir una textura de datos a la GPU se suelta la copia en CPU (función suelta: un cierre retendría su contexto). */
+function freeImage(t: THREE.Texture) { (t.image as { data: unknown }).data = null; }
+/** Textura de 1 × 1 RG8 (municipio 0, fuera del estado) hasta que llegan los datos. */
+function blankRG() {
+  const t = new THREE.DataTexture(new Uint8Array([0, 255]), 1, 1, THREE.RGFormat, THREE.UnsignedByteType);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  t.unpackAlignment = 1;
+  t.needsUpdate = true;
+  return t;
+}
 
 /** Color del cielo y de la bruma según la altura del Sol (grados). sRGB 0–1. */
 const SKY: [number, [number, number, number], [number, number, number]][] = [
@@ -115,6 +145,8 @@ export class ReliefEngine {
   private worker: Worker | null = null;
   private disposed = false;
   private small: boolean;
+  /** relieve fino (90 m) y teselas (30 m e imagen): solo en pantallas grandes y calidad no baja */
+  private fineOn: boolean;
   private reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   private renderer: THREE.WebGLRenderer;
@@ -123,7 +155,14 @@ export class ReliefEngine {
   private model = new THREE.Group();
   private controls: OrbitControls;
   private shared: SharedUniforms = makeSharedUniforms();
+  private hu: HeightUniforms = makeHeightUniforms();
   private tu: TerrainUniforms | null = null;
+  private terrainMat: THREE.MeshStandardMaterial | null = null;
+  private lod: TerrainLod | null = null;
+  /** escena armada sin datos para compilar los sombreadores mientras el worker trabaja */
+  private prep: {
+    tu: TerrainUniforms; palette: THREE.DataTexture; walls: THREE.Mesh; dots: THREE.Points; night: THREE.Points; compile: Promise<unknown>;
+  } | null = null;
   private hemi = new THREE.HemisphereLight(0xc4d6f2, 0x3b3026, 1.7);
   private sun = new THREE.DirectionalLight(0xfff0d8, 7);
   private moon = new THREE.DirectionalLight(0x9db4ff, 0);
@@ -132,16 +171,28 @@ export class ReliefEngine {
   private disposables: { dispose(): void }[] = [];
 
   private hf: Heightfield | null = null;
-  private stats: MuniStats | null = null;
   private labels: Labels | null = null;
   private mini: Minimap | null = null;
   private placeItems: { t: string; lon: number; lat: number; kind: number }[] = [];
   private placesPerMuni = new Uint16Array(85);
   private overlays: Overlays | null = null;
+  private rasters: Rasters | null = null;
+  private overlayLayer: RasterHandle | null = null;
   private baseMaps = new Map<BaseMapId, Promise<LoadedBaseMap>>();
   private base: { id: BaseMapId; map: LoadedBaseMap | null } = { id: 'altitud', map: null };
   private baseAnim: { from: number; to: number; t0: number; then?: () => void } | null = null;
   private baseReq = 0;
+  private cmp: { curtain: Curtain; base: BaseMapId | null; req: number } | null = null;
+  /** aparición del relieve fino (inicio del fundido) */
+  private detailAnim: number | null = null;
+  private pendingDetail: DetailResult | null = null;
+  private pendingLines: LinesResult | null = null;
+  private service: TerrainService | null = null;
+  private demTiles: TileSet<Uint16Array> | null = null;
+  private satTiles: TileSet<ImageBitmap> | null = null;
+  private tiles30: Tiles30 | null = null;
+  private tileDirty = true;
+  private lastTiles = 0;
   private clickHandlers: ((hit: MapHit) => boolean | void)[] = [];
   private hoverProviders: ((hit: MapHit) => string[] | null)[] = [];
 
@@ -164,6 +215,7 @@ export class ReliefEngine {
   private last = 0;
   private frameN = 0;
   private lastCam = new THREE.Matrix4();
+  private lodEx = -1;
   private renderDirty = true;
   private shadowDirty = true;
   private labelsDirty = true;
@@ -189,12 +241,17 @@ export class ReliefEngine {
   private ndc = new THREE.Vector2();
   private v1 = new THREE.Vector3();
   private v2 = new THREE.Vector3();
+  private camE = new THREE.Vector3();
   private sph = new THREE.Spherical();
+  private frustum = new THREE.Frustum();
+  private projScreen = new THREE.Matrix4();
+  private tileBox = new THREE.Box3();
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
   constructor(private el: EngineElements, private opts: EngineOptions) {
     const q = opts.quality ?? 'auto';
     this.small = q === 'low' || (q === 'auto' && Math.min(screen.width, screen.height) < 640);
+    this.fineOn = !this.small && q !== 'low';
     this.exTarget = opts.exaggeration;
     this.layers = { ...opts.layers };
     this.hour = opts.hour;
@@ -207,11 +264,12 @@ export class ReliefEngine {
     // revisar errores obliga al hilo principal a esperar la compilación en la GPU (~0.5 s al arrancar)
     renderer.debug.checkShaderErrors = !!opts.debug;
     renderer.setClearColor(0x000000, 0);
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.95;
+    // neutro (Khronos PBR Neutral): conserva el tono y la saturación de los colores de las leyendas
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = 1;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
-    renderer.shadowMap.autoUpdate = false;   // el relieve no se mueve: la sombra se recalcula solo si cambia el Sol o la exageración
+    renderer.shadowMap.autoUpdate = false;   // la sombra es estática: se recalcula solo si cambia el Sol o la exageración
     const canvas = renderer.domElement;
     canvas.tabIndex = 0;
     canvas.setAttribute('aria-label', 'Modelo 3D del relieve de Hidalgo. Flechas para moverte, + y − para acercar, Esc para quitar la selección.');
@@ -244,7 +302,8 @@ export class ReliefEngine {
     const c = (this.controls = new OrbitControls(this.camera, canvas));
     c.enableDamping = true; c.dampingFactor = 0.08;
     c.screenSpacePanning = false; c.panSpeed = 0.9;
-    c.minDistance = 0.12; c.maxDistance = 6.5;
+    // con el relieve de 30 m se puede bajar hasta ~6 km; sin él, 12 km
+    c.minDistance = this.fineOn ? 0.06 : 0.12; c.maxDistance = 6.5;
     c.maxPolarAngle = Math.PI * 0.47;
     c.rotateSpeed = 0.55; c.zoomSpeed = 0.9;
     c.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
@@ -256,6 +315,10 @@ export class ReliefEngine {
     c.addEventListener('start', () => { c.autoRotate = false; this.fly = null; this.touch(); });
     c.addEventListener('change', () => this.wake());
 
+    const g = this.geo;
+    this.hu.uGridMap.value.set(g.xMin, g.zMin, meta.step * g.KX, meta.step * g.KZ);
+    this.hu.uLod.value.set(...LOD_BLEND);
+
     this.bindInput(canvas);
     this.resize();
     this.placeSun();
@@ -264,41 +327,65 @@ export class ReliefEngine {
 
   /* ================= carga ================= */
   private dataUrls() {
-    const base = this.opts.dataBaseUrl;
-    if (base) {
-      const b = new URL(base.replace(/\/?$/, '/'), location.href);
-      return { elev: new URL('elev.bin', b).href, muni: new URL('muni.bin', b).href, vec: new URL('vec.bin', b).href };
-    }
     return {
-      elev: new URL('../data/elev.bin', import.meta.url).href,
-      muni: new URL('../data/muni.bin', import.meta.url).href,
-      vec: new URL('../data/vec.bin', import.meta.url).href,
+      elev: this.dataUrl('elev.bin', new URL('../data/elev.bin', import.meta.url).href),
+      muni: this.dataUrl('muni.bin', new URL('../data/muni.bin', import.meta.url).href),
+      muniFine: this.dataUrl('muni-50m.bin', new URL('../data/muni-50m.bin', import.meta.url).href),
+      vec: this.dataUrl('vec.bin', new URL('../data/vec.bin', import.meta.url).href),
     };
   }
+  private terrainUrls() {
+    return {
+      detail: this.dataUrl('relieve-90m.bin', new URL('../data/relieve-90m.bin', import.meta.url).href),
+      dem: this.dataUrl('relieve-30m.bin', new URL('../data/relieve-30m.bin', import.meta.url).href),
+      flow: this.dataUrl('capas/flujo-90m.bin', new URL('../data/capas/flujo-90m.bin', import.meta.url).href),
+      sat: this.dataUrl('capas/satelite-16m.bin', new URL('../data/capas/satelite-16m.bin', import.meta.url).href),
+    };
+  }
+
+  /** Worker de relieve: en pantallas grandes arranca con el visor (relieve fino y teselas); si no, al primer análisis que lo pida. */
+  private terrainService() {
+    if (this.service || this.disposed) return this.service!;
+    const grid = { W: meta.W, H: meta.H, step: meta.step, lon0: meta.lon0, lat0: meta.lat0 };
+    this.service = new TerrainService(this.terrainUrls(), grid, {
+      detail: this.fineOn, tiles: this.fineOn,
+      onDetail: m => { if (this.hf) this.applyDetail(m); else this.pendingDetail = m; },
+      onWarning: msg => console.warn('Relieve de Hidalgo:', msg),
+    });
+    return this.service;
+  }
+
+  /** Consultas de relieve para los análisis (elevación, perfiles, pendiente, cuencas…). */
+  get terrain(): TerrainApi { return this.terrainService(); }
 
   private async load() {
     if (typeof DecompressionStream === 'undefined' || typeof OffscreenCanvas === 'undefined') {
       throw new Error('Este navegador no puede abrir los datos del relieve. Actualízalo para verlo.');
     }
+    // el relieve fino viene por su lado mientras se arma la escena
+    if (this.fineOn) this.terrainService();
     const worker = (this.worker = new Worker(new URL('../worker/build.worker.ts', import.meta.url), { type: 'module' }));
     const req: BuildRequest = {
       urls: this.dataUrls(),
       grid: { W: meta.W, H: meta.H, step: meta.step, lon0: meta.lon0, lat0: meta.lat0 },
-      places: meta.places,
-      quality: { decimate: this.small ? 2 : 1, tex: this.small ? 2048 : 4096, dotStep: this.small ? 4 : 3, mini: { w: 380, h: 364 } },
+      quality: { tex: this.small ? 2048 : 4096, dotStep: this.small ? 4 : 3, mini: { w: 380, h: 364 } },
     };
+    // después del primer cuadro llegan las líneas y se cierra el worker
+    const finish = () => { worker.terminate(); if (this.worker === worker) this.worker = null; };
+    // mientras el worker arma los datos, se compilan los sombreadores (antes iban después y sumaban ~0.5 s)
+    this.prepare();
     const res = await new Promise<BuildResult>((resolve, reject) => {
       worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
         const m = ev.data;
         if (m.type === 'progress') this.opts.onProgress?.(m.stage);
         else if (m.type === 'error') reject(new Error(m.message));
-        else resolve(m);
+        else if (m.type === 'done') resolve(m);
+        else if (m.type === 'warning') { console.warn('Relieve de Hidalgo:', m.message); finish(); }
+        else { this.applyLines(m); finish(); }
       };
       worker.onerror = ev => reject(new Error(ev.message || 'Falló el procesamiento del relieve'));
       worker.postMessage(req);
     });
-    worker.terminate();
-    this.worker = null;
     if (this.disposed) { res.mini.close(); return; }
     this.opts.onProgress?.('gpu');
     let t = performance.now();
@@ -308,16 +395,21 @@ export class ReliefEngine {
     await new Promise(r => setTimeout(r, 0));
     if (this.disposed) return;
     t = performance.now();
-    // compilar los shaders antes del primer cuadro evita un tirón al aparecer
+    // compilar los shaders antes del primer cuadro evita un tirón al aparecer (casi todo ya se compiló en prepare)
+    await this.prep?.compile;
     await this.renderer.compileAsync(this.scene, this.camera).catch(() => undefined);
     if (this.disposed) return;
     res.timings.compile = Math.round(performance.now() - t);
-    this.timings = res.timings;
+    // las líneas y el relieve fino pueden haber llegado ya y anotado sus tiempos
+    this.timings = Object.assign(res.timings, this.timings);
     this.ready = true;
     const { sunrise, sunset } = sunTimes(this.ymd, this.geo.latC, this.geo.lonC);
     this.t0 = this.last = performance.now();
     this.wake();
-    this.opts.onReady?.({ minElev: res.minE, maxElev: res.maxE, sunrise, sunset, timings: res.timings });
+    this.opts.onReady?.({ minElev: meta.relief.min, maxElev: meta.relief.max, sunrise, sunset, timings: this.timings });
+    if (this.pendingDetail) { this.applyDetail(this.pendingDetail); this.pendingDetail = null; }
+    if (this.pendingLines) { this.applyLines(this.pendingLines); this.pendingLines = null; }
+    if (this.service && this.fineOn) this.service.packs.then(p => this.setupTiles(p.dem, p.sat));
   }
 
   private fail(e: unknown) {
@@ -325,88 +417,122 @@ export class ReliefEngine {
     this.opts.onError?.(e instanceof Error ? e.message : String(e));
   }
 
-  private setup(res: BuildResult) {
-    const g = this.geo;
-    const hf = (this.hf = new Heightfield(g, res.elev, res.muni, meta.W, meta.H));
-    this.stats = res.muniStats;
-
-    // texturas
-    const water = new THREE.DataTexture(res.water.data, res.water.size, res.water.size, THREE.RGFormat, THREE.UnsignedByteType);
-    water.minFilter = THREE.LinearMipmapLinearFilter;
-    water.magFilter = THREE.LinearFilter;
-    water.generateMipmaps = true;
-    water.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
-    water.needsUpdate = true;
-    // ya en la GPU no hace falta la copia de 16–32 MB
-    water.onUpdate = () => { (water.image as { data: Uint8Array | null }).data = null; };
-    // municipio por celda (el mismo arreglo que usa la selección con el puntero); se lee con texelFetch
-    const muniTex = new THREE.DataTexture(res.muni, meta.W, meta.H, THREE.RedFormat, THREE.UnsignedByteType);
-    muniTex.minFilter = muniTex.magFilter = THREE.NearestFilter;
-    muniTex.unpackAlignment = 1;
-    muniTex.needsUpdate = true;
-    const choro = new THREE.DataTexture(new Uint8Array(256 * 4), 256, 1, THREE.RGBAFormat);
-    choro.colorSpace = THREE.SRGBColorSpace;
-    choro.needsUpdate = true;
-    const bounds = new THREE.Vector4(g.xMin, g.zMin, g.xMax - g.xMin, g.zMax - g.zMin);
-    const tu = (this.tu = makeTerrainUniforms(this.shared, water, muniTex, choro, bounds));
-
-    // relieve
-    const t = res.terrain, tg = new THREE.BufferGeometry();
-    tg.setAttribute('position', new THREE.BufferAttribute(t.position, 3));
-    tg.setAttribute('normal', new THREE.BufferAttribute(t.normal, 3, true));
-    tg.setAttribute('aAlt', new THREE.BufferAttribute(t.alt, 4, true));
-    tg.setAttribute('aGlow', new THREE.BufferAttribute(t.glow, 1, true));
-    tg.setIndex(new THREE.BufferAttribute(t.index, 1));
-    tg.computeBoundingSphere();
-    const terrainMat = createTerrainMaterial(tu);
-    const terrain = new THREE.Mesh(tg, terrainMat);
-    terrain.castShadow = terrain.receiveShadow = true;
-    this.model.add(terrain);
+  /** Materiales y mallas sin datos, y su compilación (en paralelo con el worker). */
+  private prepare() {
+    const W = meta.W, H = meta.H;
+    // paleta compartida con la rampa de altitud (las demás filas las llenan los mapas base y las capas)
+    const palette = makePalette(ALT_STOPS_HEX, 3400);
+    const tu = (this.tu = makeTerrainUniforms(this.shared, this.hu, { muni: blankRG(), fields: blankTexture([128, 0, 128, 128]), palette }, W, H));
+    const defines = heightDefines(this.fineOn, this.fineOn);
+    const terrainMat = (this.terrainMat = createTerrainMaterial(tu, defines));
+    const casterMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+    const casterDepth = createCasterDepthMaterial(this.hu, tu);
+    const lod = (this.lod = new TerrainLod(terrainMat, casterMat, casterDepth, { depth: this.fineOn ? 8 : 5, range: 30, n: 32 }));
+    this.model.add(lod.view, lod.caster);
+    const empty = (n: number) => new THREE.BufferAttribute(new Float32Array(0), n);
 
     const wg = new THREE.BufferGeometry();
-    wg.setAttribute('position', new THREE.BufferAttribute(res.walls.position, 3));
-    wg.setAttribute('normal', new THREE.BufferAttribute(res.walls.normal, 3));
-    wg.setAttribute('aTop', new THREE.BufferAttribute(res.walls.top, 1));
-    wg.computeBoundingSphere();
-    const wallMat = createWallMaterial(this.shared);
+    wg.setAttribute('position', empty(3));
+    wg.setAttribute('normal', empty(3));
+    const wallMat = createWallMaterial(this.shared, this.hu, defines);
     const walls = new THREE.Mesh(wg, wallMat);
+    const wallDepth = createWallDepthMaterial(this.hu);
+    walls.customDepthMaterial = wallDepth;
+    // las paredes proyectan la sombra del bloque sobre el suelo
     walls.castShadow = walls.receiveShadow = true;
+    walls.frustumCulled = false;
     this.model.add(walls);
 
     const dg = new THREE.BufferGeometry();
-    dg.setAttribute('position', new THREE.BufferAttribute(res.dots.position, 3));
-    dg.setAttribute('color', new THREE.BufferAttribute(res.dots.color, 3));
+    dg.setAttribute('position', empty(3));
+    dg.setAttribute('color', empty(3));
     const dotMat = new THREE.PointsMaterial({ size: this.small ? 1.4 : 1.6, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.2, depthWrite: false });
-    this.model.add(new THREE.Points(dg, dotMat));
+    const dots = new THREE.Points(dg, dotMat);
+    this.model.add(dots);
 
-    // luces de las localidades
-    const np: number[] = [], ns: number[] = [];
-    for (const [, kind, lon, lat, , pop] of meta.places) {
-      np.push(g.toX(lon), hf.elevLL(lat, lon) / 1000 + 0.004, g.toZ(lat));
-      ns.push(kind === 0 ? 22 + Math.sqrt((pop || 45000) / 300000) * 26 : kind === 1 ? 12 + Math.sqrt((pop || 4000) / 40000) * 6 : 7);
-    }
+    // luces de las localidades del censo, de tamaño según su población
     const ng = new THREE.BufferGeometry();
-    ng.setAttribute('position', new THREE.Float32BufferAttribute(np, 3));
-    ng.setAttribute('aSize', new THREE.Float32BufferAttribute(ns, 1));
-    const nightMat = createNightPointsMaterial(this.shared, this.fullDpr);
+    ng.setAttribute('position', empty(3));
+    ng.setAttribute('aSize', empty(1));
+    const nightMat = createNightPointsMaterial(this.shared, this.hu, defines, this.fullDpr);
     const night = new THREE.Points(ng, nightMat);
     night.frustumCulled = false;
     night.renderOrder = 2;
     this.model.add(night);
 
-    this.disposables.push(water, muniTex, choro, tg, terrainMat, wg, wallMat, dg, dotMat, ng, nightMat);
+    this.disposables.push(palette, terrainMat, casterMat, casterDepth, lod, wg, wallMat, wallDepth, dg, dotMat, ng, nightMat);
+    this.prep = { tu, palette, walls, dots, night, compile: this.renderer.compileAsync(this.scene, this.camera).catch(() => undefined) };
+  }
+
+  private setup(res: BuildResult) {
+    const W = meta.W, H = meta.H, prep = this.prep!, tu = prep.tu;
+    const hf = (this.hf = new Heightfield(this.geo, res.elev, res.muni, W, H));
+    hf.setMuniFine(res.muniFine);
+
+    // texturas: relieve de 270 m (para los vértices), campos por nodo, municipios + contorno
+    const h0 = new THREE.DataTexture(res.elev, W, H, THREE.RedFormat, THREE.FloatType);
+    h0.minFilter = h0.magFilter = THREE.NearestFilter;
+    h0.needsUpdate = true;
+    this.hu.tH0.value = h0;
+    const fields = new THREE.DataTexture(res.fields, W, H, THREE.RGBAFormat);
+    fields.minFilter = THREE.LinearMipmapLinearFilter;
+    fields.magFilter = THREE.LinearFilter;
+    fields.generateMipmaps = true;
+    fields.needsUpdate = true;
+    fields.onUpdate = freeImage;
+    const mf = res.muniFine;
+    const muniTex = new THREE.DataTexture(res.muniTex, mf.w, mf.h, THREE.RGFormat, THREE.UnsignedByteType);
+    muniTex.minFilter = muniTex.magFilter = THREE.NearestFilter;
+    muniTex.unpackAlignment = 1;
+    muniTex.needsUpdate = true;
+    muniTex.onUpdate = freeImage;
+    tu.tMuni.value.dispose();
+    tu.tMuni.value = muniTex;
+    tu.uGrid.value.set(mf.w - 1, mf.h - 1);
+    tu.tFields.value.dispose();
+    tu.tFields.value = fields;
+    const palette = prep.palette;
+
+    // celdas del estado (y dos de margen) para no dibujar parches vacíos: dilatación separable
+    const state = new Uint8Array(W * H), tmp = new Uint8Array(W * H);
+    for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) {
+      let s = 0;
+      for (let d = -2; d <= 2; d++) { const cc = c + d; if (cc >= 0 && cc < W && res.muni[r * W + cc]) { s = 1; break; } }
+      tmp[r * W + c] = s;
+    }
+    for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) {
+      let s = 0;
+      for (let d = -2; d <= 2; d++) { const rr = r + d; if (rr >= 0 && rr < H && tmp[rr * W + c]) { s = 1; break; } }
+      state[r * W + c] = s;
+    }
+    const g = this.geo;
+    this.lod!.setData({ x0: g.xMin, z0: g.zMin, sx: meta.step * g.KX, sz: meta.step * g.KZ }, res.elev, state, W, H);
+
+    const wg = prep.walls.geometry;
+    wg.setAttribute('position', new THREE.BufferAttribute(res.walls.position, 3));
+    wg.setAttribute('normal', new THREE.BufferAttribute(res.walls.normal, 3));
+    const dg = prep.dots.geometry;
+    dg.setAttribute('position', new THREE.BufferAttribute(res.dots.position, 3));
+    dg.setAttribute('color', new THREE.BufferAttribute(res.dots.color, 3));
+    dg.computeBoundingSphere();
+    const ng = prep.night.geometry;
+    ng.setAttribute('position', new THREE.BufferAttribute(res.lights.position, 3));
+    ng.setAttribute('aSize', new THREE.BufferAttribute(res.lights.size, 1));
+    const defines = heightDefines(this.fineOn, this.fineOn);
+
+    this.disposables.push(h0, fields, muniTex);
     this.applyLayers();
 
     // etiquetas
     const labels = (this.labels = new Labels(this.el.labels, hf));
-    const pr = Math.floor(res.maxI / meta.W), pc = res.maxI % meta.W;
-    labels.add({ t: 'Punto más alto', s: `${fmt(res.maxE)} m`, lat: g.latOfRow(pr), lon: g.lonOfCol(pc), k: 'peak', pri: 1 });
+    const [plon, plat, pelev] = meta.relief.peak;
+    labels.add({ t: 'Punto más alto', s: `${fmt(pelev)} m`, lat: plat, lon: plon, k: 'peak', pri: 1 });
     for (const [t, lat, lon] of [['Huasteca', 21.08, -98.45], ['Sierra Gorda', 21.02, -99.35], ['Valle del Mezquital', 20.38, -99.18],
       ['Sierra Alta', 20.75, -98.6], ['Altiplano', 19.82, -98.5], ['Sierra Otomí-Tepehua', 20.42, -98.2], ['Comarca Minera', 20.2, -98.68]] as const) {
       labels.add({ t, lat, lon, k: 'region', pri: 2, lift: 0.35 });
     }
     for (const [n, kind, lon, lat, m, pop] of meta.places) {
-      const isCap = n === 'Pachuca';
+      const isCap = n === 'Pachuca de Soto' && m === 48;
       labels.add({ t: n, s: isCap ? 'capital' : undefined, lat, lon, k: kind === 0 ? 'city' : kind === 1 ? 'town' : 'village', pri: kind === 0 ? 0 : kind === 1 ? 3 : 6, pop });
       this.placeItems.push({ t: n, lon, lat, kind });
       this.placesPerMuni[m]++;
@@ -417,14 +543,247 @@ export class ReliefEngine {
 
     if (this.el.minimap) {
       this.mini = new Minimap(this.el.minimap, hf, res.mini,
-        this.placeItems.filter(p => p.kind === 0), ACCENT, () => { this.miniDirty = true; this.wake(); });
+        // en el minimapa solo las cinco ciudades más pobladas (meta.places viene ordenado por tamaño)
+        this.placeItems.filter(p => p.kind === 0).slice(0, 5), ACCENT, () => { this.miniDirty = true; this.wake(); });
     } else res.mini.close();
 
-    this.overlays = new Overlays(this.model, hf, this.fullDpr, () => this.invalidate());
+    this.overlays = new Overlays(this.model, hf, this.fullDpr, { uniforms: this.hu, defines }, () => this.invalidate());
     this.overlays.resolution.set(this.el.stage.clientWidth || 1, this.el.stage.clientHeight || 1);
+    this.rasters = new Rasters(tu, palette, meta, n => this.setDefine('RH_RASTERS', String(n)), () => this.invalidate());
     this.model.scale.set(UNIT, UNIT * this.ex, UNIT);
     this.model.updateMatrixWorld();
+    this.updateLod();
     this.setBaseMap(this.opts.baseMap);
+  }
+
+  /** Cambia un define del sombreador del relieve (capas raster, cortina): recompila esa variante la primera vez. */
+  private setDefine(key: string, value: string | null) {
+    const m = this.terrainMat;
+    if (!m) return;
+    const d = m.defines as Record<string, string>;
+    if (value === null ? !(key in d) : d[key] === value) return;
+    if (value === null) delete d[key]; else d[key] = value;
+    m.needsUpdate = true;
+    this.invalidate();
+  }
+
+  /** Ríos, presas y límites como campos de distancia (llegan del worker después del primer cuadro). */
+  private applyLines(m: LinesResult) {
+    const tu = this.tu;
+    if (this.disposed) return;
+    if (!tu || !this.hf) { this.pendingLines = m; return; }
+    const tex = new THREE.DataTexture(m.data, m.size, m.size, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    tex.onUpdate = freeImage;
+    const g = this.geo;
+    tu.tLines.value = tex;
+    tu.uLines.value = 1;
+    tu.uLinesSize.value = m.size;
+    tu.uLinesRange.value = m.range;
+    tu.uLinesTexelM.value = (((g.xMax - g.xMin) + (g.zMax - g.zMin)) / 2 / m.size) * 1000;
+    this.disposables.push(tex);
+    this.timings.lines = m.ms;
+    this.invalidate();
+  }
+
+  /**
+   * Relieve de 90 m: altura para los vértices y la ficha; normales y apertura del cielo (calculada aquí en la GPU, una
+   * sola pasada) empacadas en una textura para el sombreado. Aparece con un fundido.
+   */
+  private applyDetail(m: DetailResult) {
+    const tu = this.tu, hf = this.hf;
+    if (!tu || !hf || this.disposed) return;
+    const t = performance.now();
+    const hTex = new THREE.DataTexture(m.elev, m.w, m.h, THREE.RedFormat, THREE.FloatType);
+    hTex.minFilter = hTex.magFilter = THREE.NearestFilter;
+    hTex.needsUpdate = true;
+    hf.setDetail({ w: m.w, h: m.h, f: m.f, data: Int16Array.from(m.elev) });
+    hTex.onUpdate = freeImage;
+    const nTex = new THREE.DataTexture(m.normal, m.w, m.h, THREE.RGFormat, THREE.HalfFloatType);
+    nTex.minFilter = nTex.magFilter = THREE.NearestFilter;
+    nTex.needsUpdate = true;
+    const cell = (meta.step / m.f) * 1000;
+    // media precisión si se puede dibujar en ella (casi todos los equipos de escritorio); si no, 8 bits
+    const half = this.renderer.extensions.has('EXT_color_buffer_float');
+    const rt = this.detailPass(nTex, hTex, m.w, m.h, cell * this.geo.KX, cell * this.geo.KZ, half);
+    nTex.dispose();
+    this.hu.tH1.value = hTex;
+    tu.tDetail.value = rt.texture;
+    tu.uDetailSize.value.set(m.w, m.h);
+    tu.uDetailEnc.value.set(half ? 1 : 2, half ? 0 : -1);
+    this.disposables.push(hTex, rt);
+    this.detailAnim = performance.now();
+    this.timings.detail = m.ms + Math.round(performance.now() - t);
+    this.lodEx = -1;
+    this.wake();
+  }
+
+  /**
+   * Una pasada en la GPU: normal de 90 m (x, z) y apertura del cielo (1 − promedio del seno del ángulo del horizonte en
+   * 16 direcciones hasta ~3 km, en escala real; 1 = llano abierto) en una textura RGBA con mipmaps.
+   */
+  private detailPass(normals: THREE.Texture, heights: THREE.Texture, w: number, h: number, dxm: number, dzm: number, half: boolean) {
+    const rt = new THREE.WebGLRenderTarget(w, h, {
+      format: THREE.RGBAFormat, type: half ? THREE.HalfFloatType : THREE.UnsignedByteType, depthBuffer: false,
+      generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter,
+    });
+    rt.texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { tH: { value: heights }, tN: { value: normals }, uCell: { value: new THREE.Vector2(dxm, dzm) }, uEnc: { value: half ? 0 : 1 } },
+      vertexShader: /* glsl */ `void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+      fragmentShader: /* glsl */ `
+        uniform highp sampler2D tH; uniform sampler2D tN; uniform vec2 uCell; uniform float uEnc;
+        void main() {
+          ivec2 p = ivec2(gl_FragCoord.xy), size = textureSize(tH, 0);
+          float z0 = texelFetch(tH, p, 0).r, sum = 0.0;
+          if (z0 > 0.0) {
+            for (int k = 0; k < 16; k++) {
+              float a = 6.2831853 * (float(k) + 0.5) / 16.0, best = 0.0, d = 1.0;
+              vec2 dir = vec2(cos(a), sin(a));
+              for (int s = 0; s < 12; s++) {
+                vec2 o = floor(dir * d + 0.5);
+                ivec2 q = p + ivec2(o);
+                if (q.x < 0 || q.y < 0 || q.x >= size.x || q.y >= size.y) break;
+                float zq = texelFetch(tH, q, 0).r;
+                if (zq > 0.0) best = max(best, (zq - z0) / max(length(o * uCell), 1.0));
+                d = max(d + 1.0, floor(d * 1.3 + 0.5));
+              }
+              sum += best * inversesqrt(1.0 + best * best);
+            }
+          }
+          vec2 n = texelFetch(tN, p, 0).rg;
+          gl_FragColor = vec4(uEnc > 0.5 ? n * 0.5 + 0.5 : n, 1.0 - sum / 16.0, 1.0);
+        }`,
+      depthTest: false, depthWrite: false,
+    });
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+    quad.frustumCulled = false;
+    const scene = new THREE.Scene().add(quad), prev = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(rt);
+    this.renderer.render(scene, new THREE.OrthographicCamera());
+    this.renderer.setRenderTarget(prev);
+    quad.geometry.dispose();
+    mat.dispose();
+    return rt;
+  }
+
+  /** Teselas de detalle: relieve de 30 m (alturas + normales) e imagen satelital fina, en atlas de la GPU. */
+  private setupTiles(dem: TilePackInfo | null, sat: TilePackInfo | null) {
+    const tu = this.tu, hf = this.hf, svc = this.service;
+    if (!tu || !hf || !svc || this.disposed || (!dem && !sat)) return;
+    const info = dem ?? sat!, rows = (dem?.ny ?? 0) + (sat?.ny ?? 0);
+    const pages = new THREE.DataTexture(new Uint8Array(info.nx * rows * 4), info.nx, rows, THREE.RGBAFormat);
+    pages.minFilter = pages.magFilter = THREE.NearestFilter;
+    pages.needsUpdate = true;
+    this.hu.tPages.value = pages;
+    this.disposables.push(pages);
+    const r = this.renderer, at = new THREE.Vector2();
+    if (dem) {
+      const S = dem.px - 2, size = S * DEM_SLOTS;
+      const atlas = new THREE.DataTexture(new Uint16Array(size * size * 2), size, size, THREE.RGIntegerFormat, THREE.UnsignedShortType);
+      atlas.internalFormat = 'RG16UI';
+      atlas.minFilter = atlas.magFilter = THREE.NearestFilter;
+      atlas.unpackAlignment = 1;
+      atlas.needsUpdate = true;
+      r.initTexture(atlas);
+      (atlas.image as { data: Uint16Array | null }).data = null;
+      this.hu.tH2.value = atlas;
+      this.hu.uPage2.value.set(dem.nx, dem.ny, S, dem.tileCells * dem.f);
+      this.hu.uH2On.value = 1;
+      this.tiles30 = { nx: dem.nx, ny: dem.ny, cells: dem.tileCells, f: dem.f, px: S, data: new Map() };
+      hf.setTiles(this.tiles30);
+      this.demTiles = new TileSet<Uint16Array>({
+        info: dem, slotPx: S, slots: DEM_SLOTS, atlas, pages, pageRow: 0, concurrency: 6,
+        load: i => svc.tile('dem', i),
+        upload: (data, x, y) => {
+          const src = new THREE.DataTexture(data, S, S, THREE.RGIntegerFormat, THREE.UnsignedShortType);
+          src.unpackAlignment = 1;
+          r.copyTextureToTexture(src, atlas, null, at.set(x, y));
+        },
+        onResident: (i, data) => this.tiles30?.data.set(i, data),
+        onEvict: i => this.tiles30?.data.delete(i),
+        onChange: () => { this.lodEx = -1; this.invalidate(); },
+      });
+      this.disposables.push(atlas);
+    }
+    if (sat) {
+      const S = sat.px, size = S * SAT_SLOTS;
+      const atlas = new THREE.DataTexture(new Uint8Array(size * size * 4), size, size, THREE.RGBAFormat);
+      atlas.colorSpace = THREE.SRGBColorSpace;
+      atlas.minFilter = atlas.magFilter = THREE.LinearFilter;
+      atlas.generateMipmaps = false;
+      atlas.needsUpdate = true;
+      r.initTexture(atlas);
+      (atlas.image as { data: Uint8Array | null }).data = null;
+      tu.tSatAtlas.value = atlas;
+      tu.uSatPage.value.set(sat.nx, sat.ny, dem?.ny ?? 0, sat.tileCells);
+      tu.uSatSlot.value = S;
+      tu.uSatAtlasSize.value.set(size, size);
+      this.satTiles = new TileSet<ImageBitmap>({
+        info: sat, slotPx: S, slots: SAT_SLOTS, atlas, pages, pageRow: dem?.ny ?? 0, concurrency: 6,
+        load: i => svc.tile('sat', i),
+        upload: (bmp, x, y) => {
+          const src = new THREE.Texture(bmp);
+          r.copyTextureToTexture(src, atlas, null, at.set(x, y));
+          bmp.close();
+        },
+        // al llegar una tesela se piden las que siguen
+        onChange: () => { this.tileDirty = true; this.invalidate(); },
+      });
+      this.disposables.push(atlas);
+      this.applyBaseSlots();
+    }
+    this.tileDirty = true;
+    this.wake();
+  }
+
+  /** Teselas que hacen falta según la cámara: las cercanas y a la vista, de la más cercana a la más lejana. */
+  private updateTiles(now: number) {
+    const lod = this.lod;
+    if (!lod) return;
+    const sets: [TileSet<Uint16Array> | TileSet<ImageBitmap>, number][] = [];
+    if (this.demTiles) sets.push([this.demTiles, LOD_BLEND[3] + 4]);
+    // la imagen fina solo si el satélite está a la vista (como mapa base o en la cortina)
+    const satShown = this.base.id === 'satelite' || this.cmp?.base === 'satelite';
+    if (this.satTiles) sets.push([this.satTiles, satShown ? 45 : 0]);
+    const F = { x0: this.geo.xMin, z0: this.geo.zMin, sx: meta.step * this.geo.KX, sz: meta.step * this.geo.KZ };
+    const ex = this.ex, camE = this.camE, box = this.tileBox;
+    for (const [set, maxKm] of sets) {
+      const { nx, ny, tileCells: T, has } = set.info, want = new Map<number, number>();
+      if (maxKm > 0) {
+        for (let ty = 0; ty < ny; ty++) for (let tx = 0; tx < nx; tx++) {
+          const i = ty * nx + tx;
+          if (!has[i]) continue;
+          const [lo, hi] = lod.bounds(T, tx, ty);
+          const x0 = F.x0 + tx * T * F.sx, x1 = x0 + T * F.sx, z0 = F.z0 + ty * T * F.sz, z1 = z0 + T * F.sz;
+          const y0 = ((lo - 400) / 1000) * ex, y1 = ((hi + 400) / 1000) * ex;
+          const d = Math.hypot(Math.max(x0 - camE.x, 0, camE.x - x1), Math.max(y0 - camE.y, 0, camE.y - y1), Math.max(z0 - camE.z, 0, camE.z - z1));
+          if (d > maxKm) continue;
+          box.min.set(x0 * UNIT, y0 * UNIT, z0 * UNIT);
+          box.max.set(x1 * UNIT, y1 * UNIT, z1 * UNIT);
+          if (d > 6 && !this.frustum.intersectsBox(box)) continue;
+          want.set(i, d);
+        }
+      }
+      (set as TileSet<unknown>).update(want, now);
+    }
+  }
+
+  /** Elige los parches del relieve para la cámara actual. */
+  private updateLod() {
+    const lod = this.lod, cam = this.camera;
+    if (!lod) return;
+    const l = this.v1.copy(cam.position).applyMatrix4(this.inv.copy(this.model.matrixWorld).invert());
+    this.camE.set(l.x, l.y * this.ex, l.z);
+    this.hu.uCamE.value.copy(this.camE);
+    this.hu.uEx.value = this.ex;
+    this.projScreen.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.projScreen);
+    lod.update(this.camE, this.frustum, UNIT, this.ex);
+    this.lodEx = this.ex;
+    this.tileDirty = true;
   }
 
   /* ================= API pública ================= */
@@ -437,6 +796,41 @@ export class ReliefEngine {
     return base ? new URL(name, new URL(base.replace(/\/?$/, '/'), location.href)).href : bundled;
   }
 
+  private loadBase(id: Exclude<BaseMapId, 'altitud'>) {
+    let p = this.baseMaps.get(id);
+    if (!p) {
+      p = loadBaseMap(id, {
+        usvBin: this.dataUrl('capas/usv.bin', new URL('../data/capas/usv.bin', import.meta.url).href),
+        usvJson: this.dataUrl('capas/usv.json', new URL('../data/capas/usv.json', import.meta.url).href),
+        sat: this.small
+          ? this.dataUrl('capas/satelite-2048.webp', new URL('../data/capas/satelite-2048.webp', import.meta.url).href)
+          : this.dataUrl('capas/satelite-4096.webp', new URL('../data/capas/satelite-4096.webp', import.meta.url).href),
+      }, this.renderer.capabilities.getMaxAnisotropy(), meta.W);
+      this.baseMaps.set(id, p);
+      p.then(b => this.disposables.push(b.texture), () => this.baseMaps.delete(id));
+    }
+    return p;
+  }
+
+  /** Pone los mapas base en las ranuras A (el del panel) y B (el de la cortina) del sombreador. */
+  private applyBaseSlots() {
+    const tu = this.tu;
+    if (!tu) return;
+    const slot = (map: LoadedBaseMap | null, kind: { value: number }, tex: { value: THREE.Texture }, size: { value: THREE.Vector2 }, tiles: { value: number }, row: number) => {
+      kind.value = map ? map.kind : 0;
+      tex.value = map ? map.texture : blankTexture();
+      if (map) size.value.set(map.size[0], map.size[1]); else size.value.set(1, 1);
+      tiles.value = map?.tiles && this.satTiles ? 1 : 0;
+      if (map?.lut) { (tu.tPalette.value.image.data as Uint8Array).set(map.lut, row * 256 * 4); tu.tPalette.value.needsUpdate = true; }
+    };
+    slot(this.base.map, tu.uBaseKindA, tu.tBaseA, tu.uBaseSizeA, tu.uBaseTilesA, PALETTE_ROW.baseA);
+    const b = this.cmp?.base ? this.baseMaps.get(this.cmp.base) : undefined;
+    if (!b) slot(null, tu.uBaseKindB, tu.tBaseB, tu.uBaseSizeB, tu.uBaseTilesB, PALETTE_ROW.baseB);
+    else b.then(map => { if (this.cmp && this.tu) { slot(map, tu.uBaseKindB, tu.tBaseB, tu.uBaseSizeB, tu.uBaseTilesB, PALETTE_ROW.baseB); this.invalidate(); } });
+    this.tileDirty = true;
+    this.invalidate();
+  }
+
   /** Cambia el mapa base con un fundido; las texturas se cargan la primera vez que se piden. */
   setBaseMap(id: BaseMapId): Promise<void> {
     const tu = this.tu;
@@ -446,23 +840,10 @@ export class ReliefEngine {
       this.baseAnim = { from: tu.uBaseTex.value, to, t0: performance.now(), then };
       this.wake();
     };
-    if (id === 'altitud') { fadeTo(0, () => { this.base = { id, map: null }; }); return Promise.resolve(); }
-    let p = this.baseMaps.get(id);
-    if (!p) {
-      const small = this.small;
-      p = loadBaseMap(id, {
-        usvBin: this.dataUrl('capas/usv.bin', new URL('../data/capas/usv.bin', import.meta.url).href),
-        usvJson: this.dataUrl('capas/usv.json', new URL('../data/capas/usv.json', import.meta.url).href),
-        sat: small
-          ? this.dataUrl('capas/satelite-2048.webp', new URL('../data/capas/satelite-2048.webp', import.meta.url).href)
-          : this.dataUrl('capas/satelite-4096.webp', new URL('../data/capas/satelite-4096.webp', import.meta.url).href),
-      }, this.renderer.capabilities.getMaxAnisotropy());
-      this.baseMaps.set(id, p);
-      p.then(b => this.disposables.push(b.texture), () => this.baseMaps.delete(id));
-    }
-    return p.then(map => {
+    if (id === 'altitud') { fadeTo(0, () => { this.base = { id, map: null }; this.applyBaseSlots(); }); return Promise.resolve(); }
+    return this.loadBase(id).then(map => {
       if (req !== this.baseReq || this.disposed) return;
-      const swap = () => { tu.tBase.value = map.texture; this.base = { id, map }; fadeTo(1); };
+      const swap = () => { this.base = { id, map }; this.applyBaseSlots(); fadeTo(1); };
       if (tu.uBaseTex.value > 0.01 && this.base.map !== map) fadeTo(0, swap); else swap();
     });
   }
@@ -481,6 +862,20 @@ export class ReliefEngine {
     this.select(0);
   }
   search(q: string) { return search(this.index, q); }
+
+  /** Vista actual: punto que mira y cámara (para enlaces a vistas y capturas reproducibles). */
+  getView(): View {
+    const t = this.v2.copy(this.controls.target).applyMatrix4(this.inv.copy(this.model.matrixWorld).invert()), s = this.curSph();
+    return { lon: this.geo.lonOfX(t.x), lat: this.geo.latOfZ(t.z), dist: s.radius, polar: (s.phi * 180) / Math.PI, az: (s.theta * 180) / Math.PI };
+  }
+  /** Lleva la cámara a una vista (ms = 0: sin animación). */
+  setView(v: View, ms = 1200) {
+    if (!this.hf) return;
+    this.flyTo(this.worldOf(v.lon, v.lat), {
+      dist: clamp(v.dist, this.controls.minDistance, this.controls.maxDistance),
+      polar: clamp((v.polar * Math.PI) / 180, 0.001, this.controls.maxPolarAngle), azimuth: (v.az * Math.PI) / 180, ms: Math.max(1, ms),
+    });
+  }
 
   /** Vuela a un resultado del buscador, lo marca y selecciona su municipio. */
   flyToItem(r: SearchItem) {
@@ -505,11 +900,10 @@ export class ReliefEngine {
   }
 
   municipioInfo(m: number): MunicipioInfo {
-    const s = this.stats!;
+    const [minElev, maxElev, meanElev, areaKm2, localidades, poblacion] = meta.mun[m - 1];
     return {
       id: m, code: meta.codes[m - 1], name: meta.names[m - 1],
-      minElev: s.min[m], maxElev: s.max[m], meanElev: s.mean[m],
-      areaKm2: s.cells[m] * this.geo.cellKm2, places: this.placesPerMuni[m],
+      minElev, maxElev, meanElev, areaKm2, places: this.placesPerMuni[m], localidades, poblacion,
     };
   }
 
@@ -519,8 +913,8 @@ export class ReliefEngine {
    */
   setMunicipioColors(colors: Record<string | number, string> | null, strength = 0.85) {
     if (!this.tu) return;
-    const tex = this.tu.tChoro.value as THREE.DataTexture, data = tex.image.data as Uint8Array;
-    data.fill(0);
+    const tex = this.tu.tPalette.value, data = tex.image.data as Uint8Array, row = PALETTE_ROW.choro * 256 * 4;
+    data.fill(0, row, row + 256 * 4);
     if (colors) {
       const c = new THREE.Color();
       for (const [k, css] of Object.entries(colors)) {
@@ -528,7 +922,7 @@ export class ReliefEngine {
         if (!(m >= 1 && m <= 84)) continue;
         c.setStyle(css, THREE.SRGBColorSpace);
         const srgb = c.clone().convertLinearToSRGB();
-        data.set([srgb.r * 255, srgb.g * 255, srgb.b * 255, 255], m * 4);
+        data.set([srgb.r * 255, srgb.g * 255, srgb.b * 255, 255], row + m * 4);
       }
     }
     tex.needsUpdate = true;
@@ -536,22 +930,44 @@ export class ReliefEngine {
     this.invalidate();
   }
 
-  /** Capa de colores sobre el terreno, alineada a la rejilla. null la quita. */
+  /** Capa de colores sobre el terreno, alineada a la rejilla (texel i centrado en el nodo i). null la quita. */
   setOverlay(img: GridImage | null, opacity = 0.85) {
-    const tu = this.tu;
-    if (!tu) return;
-    const old = tu.tOverlay.value;
-    if (img) {
-      const tex = new THREE.DataTexture(img.rgba, img.width, img.height, THREE.RGBAFormat);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.magFilter = tex.minFilter = THREE.LinearFilter;
-      tex.needsUpdate = true;
-      tu.tOverlay.value = tex;
-      tu.uOverlaySize.value.set(img.width, img.height);
-    }
-    tu.uOverlay.value = img ? opacity : 0;
-    if (img && old !== tu.tOverlay.value) old.dispose();
-    this.invalidate();
+    if (!this.rasters) return;
+    this.overlayLayer?.dispose();
+    this.overlayLayer = null;
+    if (!img) return;
+    const sx = (meta.W - 1) / Math.max(1, img.width - 1), sy = (meta.H - 1) / Math.max(1, img.height - 1);
+    this.overlayLayer = this.rasters.add({
+      kind: 'rgba', width: img.width, height: img.height, data: img.rgba, opacity,
+      bounds: [meta.lon0 - (sx / 2) * meta.step, meta.lat0 - (meta.H - 1 + sy / 2) * meta.step, meta.lon0 + (meta.W - 1 + sx / 2) * meta.step, meta.lat0 + (sy / 2) * meta.step],
+    });
+  }
+
+  /** Cortina para comparar un mapa base (derecha) con el del panel, o capas raster con side. */
+  compare(spec: CompareSpec = {}): CompareHandle {
+    this.cmp?.curtain.dispose();
+    const req = (this.cmp?.req ?? 0) + 1;
+    const curtain = new Curtain(this.el.root, spec.position ?? 0.5, spec.labels ?? ['', ''], () => this.invalidate());
+    const base = spec.base && spec.base !== 'altitud' ? spec.base : null;
+    this.cmp = { curtain, base, req };
+    if (base) this.loadBase(base).then(() => this.applyBaseSlots(), e => console.warn('Relieve de Hidalgo:', e));
+    else this.applyBaseSlots();
+    this.setDefine('RH_COMPARE', '');
+    const engine = this;
+    return {
+      get position() { return curtain.position; },
+      setPosition: x => curtain.set(x),
+      setLabels: (l, r) => curtain.setLabels(l, r),
+      onChange: fn => curtain.onChange(fn),
+      dispose() {
+        if (engine.cmp?.req !== req) return;
+        curtain.dispose();
+        engine.cmp = null;
+        if (engine.tu) engine.tu.uCurtain.value = -1;
+        engine.setDefine('RH_COMPARE', null);
+        engine.applyBaseSlots();
+      },
+    };
   }
 
   /** Vuela a lon/lat mostrando unos viewKm de ancho. */
@@ -566,9 +982,9 @@ export class ReliefEngine {
    * así un análisis nuevo no puede dejar basura ni romper a los demás.
    */
   createScope(): MapApi {
-    const handles = new Set<PointsHandle | LinesHandle>(), offs: (() => void)[] = [];
+    const handles = new Set<{ dispose(): void }>(), offs: (() => void)[] = [];
     let fill = false, overlay = false, pin = false, alive = true;
-    const track = <T extends PointsHandle | LinesHandle>(h: T): T => {
+    const track = <T extends { dispose(): void }>(h: T): T => {
       handles.add(h);
       const d = h.dispose.bind(h);
       h.dispose = () => { handles.delete(h); d(); };
@@ -576,14 +992,17 @@ export class ReliefEngine {
     };
     const hook = <T>(list: T[], fn: T) => { list.push(fn); const off = () => { const i = list.indexOf(fn); if (i >= 0) list.splice(i, 1); }; offs.push(off); return off; };
     const ov = () => { if (!this.overlays) throw new Error('El relieve aún no está listo'); return this.overlays; };
+    const rs = () => { if (!this.rasters) throw new Error('El relieve aún no está listo'); return this.rasters; };
     return {
       meta,
-      elevationAt: (lon, lat) => this.hf?.elevLL(lat, lon) ?? 0,
+      elevationAt: (lon, lat) => this.hf?.surfaceLL(lat, lon) ?? 0,
       municipioAt: (lon, lat) => this.hf?.muniLL(lat, lon) ?? 0,
       setMunicipioFill: (c, strength) => { fill = !!c; this.setMunicipioColors(c, strength); },
       setOverlay: (img, opacity) => { overlay = !!img; this.setOverlay(img, opacity); },
       addPoints: spec => track(ov().addPoints(spec)),
       addLines: spec => track(ov().addLines(spec)),
+      addRaster: spec => track(rs().add(spec)),
+      compare: spec => track(this.compare(spec)),
       flyTo: (lon, lat, km) => this.flyToLonLat(lon, lat, km),
       select: (m, fly) => this.select(m, fly),
       highlight: m => { if (this.tu) { this.tu.uSel.value = m; this.invalidate(); } },
@@ -641,7 +1060,7 @@ export class ReliefEngine {
     ctx.fillText('Relieve de Hidalgo', 20 * k, 26 * k);
     ctx.font = `${Math.round(10 * k)}px "JetBrains Mono", ui-monospace, monospace`;
     ctx.fillStyle = 'rgba(238,241,245,0.75)';
-    ctx.fillText(`Elevación: SRTM (AWS Terrain Tiles) · Agua: © OpenStreetMap · Límites: INEGI 2022 · Exageración vertical ${this.exTarget.toFixed(1)}×`, 20 * k, h - 18 * k);
+    ctx.fillText(`Elevación: INEGI y USGS (Terrain Tiles) · Agua: © OpenStreetMap · Límites y localidades: INEGI · Exageración vertical ${this.exTarget.toFixed(1)}×`, 20 * k, h - 18 * k);
     return new Promise((resolve, reject) => out.toBlob(b => (b ? resolve(b) : reject(new Error('No se pudo generar la imagen'))), 'image/png'));
   }
 
@@ -649,9 +1068,14 @@ export class ReliefEngine {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.worker?.terminate();
+    this.service?.dispose();
+    this.demTiles?.dispose();
+    this.satTiles?.dispose();
+    this.cmp?.curtain.dispose();
     for (const f of this.cleanup) f();
     this.controls.dispose();
     this.overlays?.dispose();
+    this.rasters?.dispose();
     for (const d of this.disposables) d.dispose();
     this.labels?.dispose();
     this.renderer.dispose();
@@ -691,7 +1115,7 @@ export class ReliefEngine {
 
   /* ================= cámara ================= */
   private worldOf(lon: number, lat: number, liftKm = 0) {
-    return new THREE.Vector3(this.geo.toX(lon), this.hf!.elevLL(lat, lon) / 1000 + liftKm, this.geo.toZ(lat)).applyMatrix4(this.model.matrixWorld);
+    return new THREE.Vector3(this.geo.toX(lon), this.hf!.surfaceLL(lat, lon) / 1000 + liftKm, this.geo.toZ(lat)).applyMatrix4(this.model.matrixWorld);
   }
   private curDist() { return this.camera.position.distanceTo(this.controls.target); }
   private curSph() { return new THREE.Spherical().setFromVector3(this.v1.copy(this.camera.position).sub(this.controls.target)); }
@@ -848,6 +1272,7 @@ export class ReliefEngine {
     this.camera.updateProjectionMatrix();
     if (this.camera.aspect < 0.8 && this.frameN === 0) { this.home.pos.set(0.12, 3.3, 4.6); this.camera.position.copy(this.home.pos); }
     this.labelsDirty = true;
+    this.lodEx = -1;
     this.invalidate();
   }
 
@@ -869,7 +1294,7 @@ export class ReliefEngine {
     const pt = this.overlays?.pick(this.camera, this.model.matrixWorld, cx - r.left, cy - r.top, r.width, r.height);
     if (pt) {
       const s = pt.layer.spec, lon = s.lon[pt.index], lat = s.lat[pt.index];
-      return { lon, lat, elev: this.hf.elevLL(lat, lon), municipio: this.hf.muniLL(lat, lon), point: pt };
+      return { lon, lat, elev: this.hf.surfaceLL(lat, lon), municipio: this.hf.muniLL(lat, lon), point: pt };
     }
     const hit = this.pickScreen(cx, cy);
     return hit ? { lon: hit.lon, lat: hit.lat, elev: hit.e, municipio: hit.m } : null;
@@ -947,7 +1372,7 @@ export class ReliefEngine {
     }, ACCENT);
     const m = hf.muniLL(lat, lon);
     if (this.el.where) this.el.where.textContent = m ? meta.names[m - 1] : 'Fuera de Hidalgo';
-    if (this.el.whereAlt) this.el.whereAlt.textContent = m ? `${fmt(hf.elevLL(lat, lon))} m` : '';
+    if (this.el.whereAlt) this.el.whereAlt.textContent = m ? `${fmt(hf.surfaceLL(lat, lon))} m` : '';
   }
 
   /* ================= bucle ================= */
@@ -990,6 +1415,12 @@ export class ReliefEngine {
       if (p >= 1) { this.baseAnim = null; a.then?.(); }
       active = true;
     }
+    if (this.detailAnim !== null && this.tu) {
+      const p = Math.min(1, (now - this.detailAnim) / 700);
+      this.tu.uDetail.value = this.hu.uH1On.value = easeIO(p);
+      if (p >= 1) this.detailAnim = null;
+      active = true;
+    }
     if (this.fly) { this.stepFly(now); active = true; }
 
     // el objetivo no sale del estado y va montado sobre el relieve
@@ -997,7 +1428,7 @@ export class ReliefEngine {
     c.target.x = clamp(c.target.x, g.xMin * UNIT, g.xMax * UNIT);
     c.target.z = clamp(c.target.z, g.zMin * UNIT, g.zMax * UNIT);
     const tlat = g.latOfZ(c.target.z / UNIT), tlon = g.lonOfX(c.target.x / UNIT);
-    const surf = ((hf.muniLL(tlat, tlon) ? hf.elevLL(tlat, tlon) : 1500) / 1000) * UNIT * this.ex;
+    const surf = ((hf.muniLL(tlat, tlon) ? hf.surfaceLL(tlat, tlon) : 1500) / 1000) * UNIT * this.ex;
     const dy = (surf - c.target.y) * (this.fly ? 1 : 1 - Math.exp(-dt * 4));
     if (Math.abs(dy) > 1e-6) { c.target.y += dy; active = true; }
     cam.position.add(this.v1.copy(c.target).sub(before));
@@ -1008,13 +1439,24 @@ export class ReliefEngine {
     const cl = this.v1.copy(cam.position).applyMatrix4(this.inv.copy(model.matrixWorld).invert());
     const gr = g.rowOf(g.latOfZ(cl.z)), gc = g.colOf(g.lonOfX(cl.x));
     if (gr > 0 && gc > 0 && gr < meta.H - 1 && gc < meta.W - 1) {
-      const floor = hf.elevAt(gr, gc) / 1000 + 0.35;
+      const floor = hf.surfaceAt(gr, gc) / 1000 + 0.35;
       if (cl.y < floor) { cl.y = floor; cam.position.copy(cl.applyMatrix4(model.matrixWorld)); }
     }
 
     cam.updateMatrixWorld();
     const moved = !this.lastCam.equals(cam.matrixWorld);
     if (moved) { this.lastCam.copy(cam.matrixWorld); this.labelsDirty = this.miniDirty = true; this.lastMove = now; }
+    // parches del relieve para esta cámara
+    if (moved || this.lodEx !== this.ex) this.updateLod();
+    // teselas de detalle: cada ~150 ms mientras se mueve y una vez al detenerse
+    if (this.tileDirty && (now - this.lastTiles > 150 || !(active || moved))) {
+      this.updateTiles(now);
+      this.tileDirty = false;
+      this.lastTiles = now;
+    }
+    if (this.demTiles?.animate(now)) { this.renderDirty = true; this.lodEx = -1; }
+    if (this.satTiles?.animate(now)) this.renderDirty = true;
+    if (this.tu) this.tu.uCurtain.value = this.cmp ? this.cmp.curtain.position * this.renderer.domElement.width : -1;
 
     const P = this.pointer;
     if (P.dirty || (moved && P.in && this.frameN % 3 === 0)) { this.updateHover(); P.dirty = false; }
@@ -1024,6 +1466,8 @@ export class ReliefEngine {
     if (ambient) this.shared.uTime.value += dt;
     const dist = this.curDist();
     this.shared.uHazeRef.value = dist;
+    // la sombra del bloque sobre el suelo se desvanece de cerca (cada texel de la sombra mide ~70 m)
+    (this.ground.material as THREE.ShadowMaterial).opacity = 0.38 * smooth(0.12, 0.35, dist);
 
     if (this.labelsDirty && this.labels && (this.frameN % 2 === 0 || !active) && intro > 0.85) {
       this.labels.layout(cam, model.matrixWorld, dist, this.layers, this.el.stage.clientWidth, this.el.stage.clientHeight);
@@ -1060,8 +1504,9 @@ export class ReliefEngine {
       this.renderDirty = false;
     }
 
-    const keep = moving || ambient || this.renderDirty || this.labelsDirty || this.miniDirty || P.dirty || this.dpr < this.fullDpr;
+    const keep = moving || ambient || this.renderDirty || this.labelsDirty || this.miniDirty || P.dirty || this.dpr < this.fullDpr || this.tileDirty;
     if (keep) this.raf = requestAnimationFrame(this.frame);
     else this.running = false;
   };
 }
+

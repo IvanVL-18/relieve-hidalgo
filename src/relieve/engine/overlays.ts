@@ -3,6 +3,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import type { Heightfield } from './heightfield';
+import { HEIGHT_GLSL, withHeights, type HeightUniforms } from './heights';
 
 /** Contenido de la ficha al pasar el cursor sobre un punto. */
 export interface Tooltip { title: string; lines?: string[] }
@@ -54,16 +55,22 @@ export interface LinesHandle {
 
 const s2l = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
 
+/** Superficie compartida (heights.ts): las capas se apoyan en el mismo relieve que se dibuja. */
+export interface SurfaceShaders { uniforms: HeightUniforms; defines: Record<string, string> }
+
 /** Puntos en pantalla: círculo con borde oscuro, tamaño en px que crece un poco al acercarse. */
-function dotMaterial(pixelRatio: number) {
+function dotMaterial(pixelRatio: number, sf: SurfaceShaders) {
   return new THREE.ShaderMaterial({
-    uniforms: { uScale: { value: pixelRatio } },
+    defines: { ...sf.defines },
+    uniforms: { ...sf.uniforms, uScale: { value: pixelRatio } },
     vertexShader: /* glsl */ `
+      ${HEIGHT_GLSL}
       attribute float aSize; attribute vec4 aColor; uniform float uScale;
       varying vec4 vColor;
       vec3 toLin(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
       void main() {
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vec3 p = vec3(position.x, rhSurface(rhGridOf(position.xz)) * 0.001 + 0.01, position.z);
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
         gl_Position.z -= 0.0004 * gl_Position.w;
         gl_PointSize = aColor.a > 0.0 ? aSize * uScale * clamp(2.6 / -mv.z, 0.75, 2.4) : 0.0;
@@ -85,14 +92,17 @@ function dotMaterial(pixelRatio: number) {
 }
 
 /** Líneas sobre el relieve: se adelantan un poco en profundidad para no hundirse entre vértices. */
-function lineMaterial(onTop: boolean, opacity: number) {
+function lineMaterial(onTop: boolean, opacity: number, lift: number, sf: SurfaceShaders) {
   return new THREE.ShaderMaterial({
-    uniforms: { uOpacity: { value: opacity } },
+    defines: { ...sf.defines },
+    uniforms: { ...sf.uniforms, uOpacity: { value: opacity }, uLift: { value: lift } },
     vertexShader: /* glsl */ `
-      attribute vec4 aColor; varying vec4 vColor;
+      ${HEIGHT_GLSL}
+      attribute vec4 aColor; varying vec4 vColor; uniform float uLift;
       vec3 toLin(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
       void main() {
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vec3 p = vec3(position.x, rhSurface(rhGridOf(position.xz)) * 0.001 + uLift, position.z);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
         gl_Position.z -= 0.0006 * gl_Position.w;
         vColor = vec4(toLin(aColor.rgb), aColor.a);
       }`,
@@ -109,9 +119,50 @@ function lineMaterial(onTop: boolean, opacity: number) {
   });
 }
 
+/** Línea de pantalla (rutas) sobre la superficie: la altura de cada extremo la pone el sombreador. */
+function screenLineMaterial(spec: LinesSpec, lift: number, sf: SurfaceShaders) {
+  const mat = new LineMaterial({ linewidth: spec.width, vertexColors: true, transparent: (spec.opacity ?? 1) < 1, opacity: spec.opacity ?? 1, depthTest: !spec.onTop, depthWrite: false });
+  mat.defines = { ...mat.defines, ...sf.defines };
+  mat.customProgramCacheKey = () => 'rh-screen-line';
+  mat.onBeforeCompile = sh => {
+    withHeights(sh, sf.uniforms);
+    sh.uniforms.uLift = { value: lift };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform float uLift;')
+      .replace('vec4 start = modelViewMatrix * vec4( instanceStart, 1.0 );', `
+        vec3 rhS = vec3(instanceStart.x, rhSurface(rhGridOf(instanceStart.xz)) * 0.001 + uLift, instanceStart.z);
+        vec4 start = modelViewMatrix * vec4( rhS, 1.0 );`)
+      .replace('vec4 end = modelViewMatrix * vec4( instanceEnd, 1.0 );', `
+        vec3 rhE = vec3(instanceEnd.x, rhSurface(rhGridOf(instanceEnd.xz)) * 0.001 + uLift, instanceEnd.z);
+        vec4 end = modelViewMatrix * vec4( rhE, 1.0 );`);
+  };
+  return mat;
+}
+
+/** Columnas 3D: la base de cada instancia se apoya en la superficie (la matriz trae x, z y la escala). */
+function columnMaterial(sf: SurfaceShaders) {
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0, emissive: 0x000000 });
+  mat.defines = { ...sf.defines };
+  mat.customProgramCacheKey = () => 'rh-column';
+  mat.onBeforeCompile = sh => {
+    withHeights(sh, sf.uniforms);
+    sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', `
+      vec4 mvPosition = vec4( transformed, 1.0 );
+      #ifdef USE_INSTANCING
+      mvPosition = instanceMatrix * mvPosition;
+      mvPosition.y += rhSurface(rhGridOf(instanceMatrix[3].xz)) * 0.001;
+      #endif
+      mvPosition = modelViewMatrix * mvPosition;
+      gl_Position = projectionMatrix * mvPosition;`);
+  };
+  return mat;
+}
+
 /**
  * Capas de puntos y líneas de los análisis. Viven dentro del grupo del modelo, así que siguen la exageración
- * vertical. Las coordenadas se pasan a km locales y se apoyan en el relieve una sola vez, al crearlas.
+ * vertical. Las coordenadas se pasan a km locales; la altura la pone el sombreador con la misma superficie que el
+ * relieve (no se hunden ni flotan al cambiar el detalle). Las anclas en CPU (para señalar con el cursor) usan la mejor
+ * altura disponible al crearlas.
  */
 export class Overlays {
   private points = new Set<PointsLayer>();
@@ -121,10 +172,10 @@ export class Overlays {
   /** tamaño del lienzo en px CSS, para el grosor de las líneas de pantalla */
   readonly resolution = new THREE.Vector2(1, 1);
 
-  constructor(private model: THREE.Group, private hf: Heightfield, private pixelRatio: number, private onChange: () => void) {}
+  constructor(private model: THREE.Group, private hf: Heightfield, private pixelRatio: number, private sf: SurfaceShaders, private onChange: () => void) {}
 
   addPoints(spec: PointsSpec): PointsHandle {
-    const layer = new PointsLayer(spec, this.hf, this.pixelRatio, this.onChange, () => { this.points.delete(layer); this.onChange(); });
+    const layer = new PointsLayer(spec, this.hf, this.pixelRatio, this.sf, this.onChange, () => { this.points.delete(layer); this.onChange(); });
     this.points.add(layer);
     this.model.add(layer.object);
     this.onChange();
@@ -132,7 +183,7 @@ export class Overlays {
   }
 
   addLines(spec: LinesSpec): LinesHandle {
-    const layer = new LinesLayer(spec, this.hf, this.resolution, this.onChange, () => { this.lines.delete(layer); this.onChange(); });
+    const layer = new LinesLayer(spec, this.hf, this.resolution, this.sf, this.onChange, () => { this.lines.delete(layer); this.onChange(); });
     this.lines.add(layer);
     this.model.add(layer.object);
     this.onChange();
@@ -185,29 +236,27 @@ class PointsLayer implements PointsHandle {
   private geo: THREE.BufferGeometry;
   private mat: THREE.Material;
 
-  constructor(readonly spec: PointsSpec, hf: Heightfield, pixelRatio: number, private changed: () => void, private onDispose: () => void) {
+  constructor(readonly spec: PointsSpec, hf: Heightfield, pixelRatio: number, sf: SurfaceShaders, private changed: () => void, private onDispose: () => void) {
     const n = (this.count = spec.lon.length), g = hf.geo;
     const a = (this.anchors = new Float32Array(n * 3));
     for (let i = 0; i < n; i++) {
       a[i * 3] = g.toX(spec.lon[i]);
-      a[i * 3 + 1] = hf.elevLL(spec.lat[i], spec.lon[i]) / 1000;
+      a[i * 3 + 1] = hf.surfaceLL(spec.lat[i], spec.lon[i]) / 1000;
       a[i * 3 + 2] = g.toZ(spec.lat[i]);
     }
     if (spec.shape === 'dot') {
       const geo = (this.geo = new THREE.BufferGeometry());
-      const pos = Float32Array.from(a);
-      for (let i = 0; i < n; i++) pos[i * 3 + 1] += 0.01;
-      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('position', new THREE.BufferAttribute(Float32Array.from(a), 3));
       geo.setAttribute('aColor', new THREE.BufferAttribute(Uint8Array.from(spec.color), 4, true));
       geo.setAttribute('aSize', new THREE.BufferAttribute(typeof spec.size === 'number' ? new Float32Array(n).fill(spec.size) : spec.size, 1));
-      this.mat = dotMaterial(pixelRatio);
+      this.mat = dotMaterial(pixelRatio, sf);
       const pts = new THREE.Points(geo, this.mat);
       pts.frustumCulled = false;
       pts.renderOrder = 3;
       this.object = pts;
     } else {
       this.geo = new THREE.CylinderGeometry(1, 1, 1, 8, 1).translate(0, 0.5, 0);
-      this.mat = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0, emissive: 0x000000 });
+      this.mat = columnMaterial(sf);
       const mesh = (this.mesh = new THREE.InstancedMesh(this.geo, this.mat, n));
       mesh.frustumCulled = false;
       this.object = mesh;
@@ -240,7 +289,8 @@ class PointsLayer implements PointsHandle {
     const m = new THREE.Matrix4(), a = this.anchors, size = this.spec.size, col = this.spec.color;
     for (let i = 0; i < this.count; i++) {
       const r = col[i * 4 + 3] ? (typeof size === 'number' ? size : size[i]) : 0;
-      m.makeScale(r, col[i * 4 + 3] ? Math.max(1e-4, h[i]) : 0, r).setPosition(a[i * 3], a[i * 3 + 1] - 0.005, a[i * 3 + 2]);
+      // la altura del suelo la suma el sombreador; aquí solo se hunde un poco la base
+      m.makeScale(r, col[i * 4 + 3] ? Math.max(1e-4, h[i]) : 0, r).setPosition(a[i * 3], -0.005, a[i * 3 + 2]);
       this.mesh.setMatrixAt(i, m);
     }
     this.mesh.instanceMatrix.needsUpdate = true;
@@ -264,7 +314,7 @@ class LinesLayer implements LinesHandle {
   private segLine: Uint32Array;
   private colorAttr: THREE.BufferAttribute | null = null;
 
-  constructor(spec: LinesSpec, hf: Heightfield, resolution: THREE.Vector2, private changed: () => void, private onDispose: () => void) {
+  constructor(spec: LinesSpec, hf: Heightfield, resolution: THREE.Vector2, sf: SurfaceShaders, private changed: () => void, private onDispose: () => void) {
     const g = hf.geo, nl = spec.len.length;
     let nseg = 0;
     for (let l = 0; l < nl; l++) nseg += Math.max(0, spec.len[l] - 1);
@@ -276,7 +326,7 @@ class LinesLayer implements LinesHandle {
       for (let k = st; k + 1 < st + spec.len[l]; k++, s++) {
         for (let e = 0; e < 2; e++) {
           const lon = spec.lon[k + e], lat = spec.lat[k + e], o = s * 6 + e * 3;
-          pos[o] = g.toX(lon); pos[o + 1] = hf.elevLL(lat, lon) / 1000 + lift; pos[o + 2] = g.toZ(lat);
+          pos[o] = g.toX(lon); pos[o + 1] = 0; pos[o + 2] = g.toZ(lat);
         }
         lineOf[s] = l;
       }
@@ -284,7 +334,7 @@ class LinesLayer implements LinesHandle {
     if ((spec.width ?? 1) > 1) {
       const geo = new LineSegmentsGeometry();
       geo.setPositions(pos);
-      const mat = new LineMaterial({ linewidth: spec.width, vertexColors: true, transparent: (spec.opacity ?? 1) < 1, opacity: spec.opacity ?? 1, depthTest: !spec.onTop, depthWrite: false });
+      const mat = screenLineMaterial(spec, lift, sf);
       mat.resolution = resolution;
       this.object = new LineSegments2(geo, mat);
     } else {
@@ -293,7 +343,7 @@ class LinesLayer implements LinesHandle {
       this.colorAttr = new THREE.BufferAttribute(new Uint8Array(nseg * 8), 4, true);
       geo.setAttribute('aColor', this.colorAttr);
       geo.computeBoundingSphere();
-      this.object = new THREE.LineSegments(geo, lineMaterial(!!spec.onTop, spec.opacity ?? 1));
+      this.object = new THREE.LineSegments(geo, lineMaterial(!!spec.onTop, spec.opacity ?? 1, lift, sf));
     }
     this.object.renderOrder = spec.onTop ? 6 : 2;
     this.object.frustumCulled = false;

@@ -21,7 +21,7 @@ export const ANALYSES: AnalysisDef[] = [
   {
     id: 'marginacion', titulo: 'Relieve y marginación', grupo: 'Desigualdad',
     resumen: '¿El rezago se concentra donde el terreno es más abrupto? Mapa bivariado y dispersión por municipio.',
-    fuentes: ['CONAPO, Índice de marginación por municipio 2020', 'Pendiente: SRTM'],
+    fuentes: ['CONAPO, Índice de marginación por municipio 2020', 'Pendiente: relieve de INEGI medido a 30 m (Terrain Tiles)'],
     load: () => import('./marginacion/Marginacion'),
   },
   {

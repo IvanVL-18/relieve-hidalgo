@@ -1,3 +1,4 @@
+import type { TerrainApi } from '../shared/terrain';
 import type { Meta } from '../shared/types';
 import { fetchBin } from '../worker/decode';
 import { createRouter, type Router } from './accesibilidad/router';
@@ -10,7 +11,8 @@ export interface Municipio {
   im: number | null; gm: string | null; imn: number | null;
   analf: number | null; sbasc: number | null; ovsde: number | null; ovsee: number | null; ovsae: number | null;
   ovpt: number | null; vhac: number | null; pl5000: number | null; po2sm: number | null;
-  pendiente: number; pct_pend_15: number; rugosidad: number; alt_media: number; alt_min: number; alt_max: number;
+  /** relieve medido a 30 m: pendiente media (°), % del territorio con más de 15° y de 30°, rugosidad (m), altitudes */
+  pendiente: number; pct_pend_15: number; pct_pend_30: number; rugosidad: number; alt_media: number; alt_min: number; alt_max: number;
   uso: Record<string, number>;
 }
 
@@ -86,8 +88,9 @@ export type ResolveUrl = (name: string, bundled: string) => string;
 /**
  * Datos de los análisis, cargados una sola vez por visor y compartidos entre análisis.
  * Para agregar un conjunto nuevo: su URL con new URL(…, import.meta.url) y un cargador aquí.
+ * terrain: el worker de relieve del visor (elevación, perfiles, pendiente, cuencas).
  */
-export function createDatasets(resolve: ResolveUrl, meta: Meta) {
+export function createDatasets(resolve: ResolveUrl, meta: Meta, terrain?: () => TerrainApi) {
   const cache = new Map<string, Promise<unknown>>();
   let router: Router | null = null;
   const once = <T>(key: string, load: () => Promise<T>): Promise<T> => {
@@ -102,6 +105,8 @@ export function createDatasets(resolve: ResolveUrl, meta: Meta) {
     servicios: () => once('servicios', async () => decodeServicios(await fetchBin(resolve('capas/servicios.bin', new URL('../data/capas/servicios.bin', import.meta.url).href)))),
     /** worker de rutas (red vial): se crea al primer uso y lo comparten Accesibilidad y Localidades */
     router: () => (router ??= createRouter(resolve('capas/vias.bin', new URL('../data/capas/vias.bin', import.meta.url).href), meta)),
+    /** relieve a la mejor resolución (30 m donde hay teselas, si no 90 m): elevación, perfil, pendiente, flujo, cuencas */
+    terrain: (): TerrainApi => { if (!terrain) throw new Error('El relieve no está disponible'); return terrain(); },
     dispose: () => { router?.dispose(); router = null; cache.clear(); },
   };
 }

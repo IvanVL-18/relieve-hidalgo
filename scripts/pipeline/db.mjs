@@ -42,7 +42,7 @@ async function insert(table, cols, rows, batch = 500) {
 
 await db.query('begin');
 await db.query('drop schema if exists relieve cascade; create schema relieve');
-await db.query(`comment on schema relieve is 'Relieve de Hidalgo: población, marginación, servicios, red vial y uso de suelo. Generado por scripts/pipeline/db.mjs'`);
+await db.query(`comment on schema relieve is 'Relieve de Hidalgo: población, marginación, servicios, red vial, ríos y uso de suelo. Generado por scripts/pipeline/db.mjs'`);
 
 await db.query(`create table relieve.fuentes (clave text primary key, fuente text, licencia text, url text, descargado date)`);
 const fuentes = fs.existsSync(path.join(CACHE, 'fuentes.json')) ? readJSON(path.join(CACHE, 'fuentes.json')) : {};
@@ -54,8 +54,8 @@ await db.query(`create table relieve.municipios (
   pob integer, pob_fem integer, pob_mas integer, pob_0_14 integer, pob_15_64 integer, pob_65 integer, viviendas integer,
   area_km2 real, densidad real, localidades integer, pob_urbana integer,
   im real, gm text, imn real, analf real, sbasc real, ovsde real, ovsee real, ovsae real, ovpt real, vhac real, pl5000 real, po2sm real,
-  pendiente real, pct_pend_15 real, rugosidad real, alt_media integer, alt_min integer, alt_max integer, uso jsonb)`);
-await db.query(`comment on table relieve.municipios is 'Población (INEGI ITER 2020), marginación (CONAPO 2020: im = índice, gm = grado; a menor índice, mayor marginación), relieve (SRTM) y uso de suelo (% por grupo, INEGI Serie VII)'`);
+  pendiente real, pct_pend_15 real, pct_pend_30 real, rugosidad real, alt_media integer, alt_min integer, alt_max integer, uso jsonb)`);
+await db.query(`comment on table relieve.municipios is 'Población (INEGI ITER 2020), marginación (CONAPO 2020: im = índice, gm = grado; a menor índice, mayor marginación), relieve medido a 30 m (INEGI vía Terrain Tiles; área del polígono INEGI) y uso de suelo (% por grupo, INEGI Serie VII)'`);
 const mun = readJSON(path.join(OUT, 'municipios.json'));
 await insert('municipios', Object.keys(mun[0]).map(k => (k === 'uso' ? 'uso' : k)), mun.map(m => ({ ...m, uso: JSON.stringify(m.uso) })));
 
@@ -90,6 +90,13 @@ await insert('uso_suelo', ['clave', 'descripcion', 'grupo', 'secundaria', 'geom'
   const g = usvGroupOf(p.clave);
   return { clave: p.clave, descripcion: p.descripcion, grupo: USV_GROUPS[g.group].id, secundaria: g.secondary, geom: JSON.stringify(p.geom) };
 }), 200);
+
+/* ríos (drenaje calculado a 90 m) */
+if (exists('rios.json')) {
+  await db.query(`create table relieve.rios (id serial primary key, orden smallint, area_km2 real, km real, geom jsonb)`);
+  await db.query(`comment on table relieve.rios is 'Red de drenaje calculada del relieve a 90 m y guiada por los ríos de OpenStreetMap: tramos entre confluencias con orden de Strahler y área drenada al final del tramo. geom: GeoJSON LineString (WGS84)'`);
+  await insert('rios', ['orden', 'area_km2', 'km', 'geom'], readJSON(path.join(OUT, 'rios.json')).map(r => ({ ...r, geom: JSON.stringify({ type: 'LineString', coordinates: r.geom }) })), 500);
+}
 
 /* red vial */
 if (exists('vias_nodos.json')) {

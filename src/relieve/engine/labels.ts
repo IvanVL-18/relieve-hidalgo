@@ -25,7 +25,7 @@ export interface LabelItem {
 
 export interface LabelLayers { places: boolean; water: boolean }
 
-/** Etiquetas HTML ancladas al relieve, con detección de choques en pantalla. */
+/** Etiquetas HTML ancladas al relieve (la mejor altura disponible al crearlas), con detección de choques en pantalla. */
 export class Labels {
   readonly items: LabelItem[] = [];
   private placed: number[][] = [];
@@ -42,7 +42,7 @@ export class Labels {
 
   add(o: Omit<LabelItem, 'el' | 'p' | 'w' | 'on'>) {
     const g = this.hf.geo;
-    const p = new THREE.Vector3(g.toX(o.lon), this.hf.elevLL(o.lat, o.lon) / 1000 + (o.lift ?? 0.02), g.toZ(o.lat));
+    const p = new THREE.Vector3(g.toX(o.lon), this.hf.surfaceLL(o.lat, o.lon) / 1000 + (o.lift ?? 0.02), g.toZ(o.lat));
     const w = (o.t.length + (o.s ? o.s.length + 1 : 0)) * (o.k === 'region' ? 7.6 : o.k === 'village' ? 6.2 : 7) + 14;
     const item: LabelItem = { ...o, el: null, p, w, on: false };
     this.items.push(item);
@@ -64,7 +64,7 @@ export class Labels {
 
   setPin(name: string | null, lat = 0, lon = 0) {
     if (name === null) { this.pin = null; this.pinEl.classList.remove('on'); return; }
-    this.pin = new THREE.Vector3(this.hf.geo.toX(lon), this.hf.elevLL(lat, lon) / 1000 + 0.02, this.hf.geo.toZ(lat));
+    this.pin = new THREE.Vector3(this.hf.geo.toX(lon), this.hf.surfaceLL(lat, lon) / 1000 + 0.02, this.hf.geo.toZ(lat));
     this.pinEl.querySelector('b')!.textContent = name;
   }
   get pinPoint() { return this.pin; }
@@ -77,7 +77,7 @@ export class Labels {
       if (o.k === 'region') want = dist > 1.2;
       else if (o.k === 'town') want = layers.places && dist < 3.2;
       else if (o.k === 'village') want = layers.places && dist < 1.0;
-      else if (o.k === 'city') want = layers.places || o.t === 'Pachuca';
+      else if (o.k === 'city') want = layers.places || o.s === 'capital';
       else if (o.k === 'river' || o.k === 'lake') want = layers.water && dist < 3.6;
       let x = 0, y = 0;
       if (want) {

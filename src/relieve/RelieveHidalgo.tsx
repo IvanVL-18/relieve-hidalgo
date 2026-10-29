@@ -145,7 +145,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
               import('./analyses/datasets').then(({ createDatasets }) => {
                 if (cancelled || !engine) return;
                 const e = engine;
-                data = createDatasets((name, bundled) => e.dataUrl(name, bundled), e.meta);
+                data = createDatasets((name, bundled) => e.dataUrl(name, bundled), e.meta, () => e.terrain);
                 setDatasets(data);
               });
               propsRef.current.onReady?.(i);
@@ -258,10 +258,11 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                 <button type="button" className="rh-icon-btn" aria-label="Quitar selección" onClick={() => eng()?.select(0)}><IconClose /></button>
               </header>
               <dl>
+                <div><dt>Población 2020</dt><dd>{fmtN(selected.poblacion)}</dd></div>
+                <div><dt>Superficie</dt><dd>{selected.areaKm2.toLocaleString('es-MX', { maximumFractionDigits: 1 }).replace(/,/g, ' ')} km²</dd></div>
                 <div><dt>Altitud</dt><dd>{fmtN(selected.minElev)}–{fmtN(selected.maxElev)} m</dd></div>
                 <div><dt>Media</dt><dd>{fmtN(selected.meanElev)} m</dd></div>
-                <div><dt>Superficie</dt><dd>≈ {fmtN(selected.areaKm2)} km²</dd></div>
-                <div><dt>Localidades en el mapa</dt><dd>{selected.places}</dd></div>
+                <div><dt>Localidades</dt><dd>{fmtN(selected.localidades)}</dd></div>
               </dl>
               <button type="button" className="rh-text-btn" onClick={() => eng()?.select(selected.id, true)}><IconTarget />Acercar</button>
             </section>
@@ -339,7 +340,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                     {info && <div className="rh-mono rh-sunline">Hoy amanece a las {fmtHour(info.sunrise)} y anochece a las {fmtHour(info.sunset)}</div>}
                   </div>
                   <div className="rh-mono rh-keys">Arrastrar: girar · Clic derecho o Shift: mover · Rueda: acercar donde apuntas · Clic: municipio · Doble clic: ir ahí</div>
-                  <div className="rh-mono rh-credits">Elevación: SRTM vía Terrain Tiles (AWS) · Ríos y presas: © OpenStreetMap y red de drenaje calculada del relieve · Límites: INEGI 2022{baseCredit && ` · ${baseCredit}`}</div>
+                  <div className="rh-mono rh-credits">Elevación: INEGI (Continental relief 2016) y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS) · Ríos y presas: © OpenStreetMap y red de drenaje calculada del relieve · Límites: INEGI 2022 · Localidades: INEGI, Censo 2020{baseCredit && ` · ${baseCredit}`}</div>
                 </div>
               )}
             </div>

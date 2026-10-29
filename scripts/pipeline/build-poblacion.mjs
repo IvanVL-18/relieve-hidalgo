@@ -1,53 +1,32 @@
 #!/usr/bin/env node
 /**
  * Población (INEGI ITER 2020), marginación (CONAPO 2020) y relieve por municipio y localidad.
+ * El relieve se mide a 30 m: municipios desde out/relieve_municipios.json (build-relieve) y localidades aquí.
  *   capas/municipios.json   84 municipios: población, marginación e indicadores, relieve, uso de suelo
  *   capas/localidades.bin   gzip RHL1 (formato en src/relieve/analyses/datasets.ts)
  *   out/municipios.json · out/localidades.json   tablas completas para la base de datos
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import zlib from 'node:zlib';
 import * as XLSX from 'xlsx';
-import { BinWriter, CACHE, H, KX, KZ, LAYERS, OUT, ROOT, STEP, W, colOf, decodeText, dms, kb, log, parseCSV, readJSON, rowOf, unzip, writeGz, writeJSON } from './lib.mjs';
+import { BinWriter, CACHE, LAYERS, OUT, dms, kb, log, readIter, readJSON, unzip, writeGz, writeJSON } from './lib.mjs';
 import { SOURCES } from './sources.mjs';
-import { decodeElev } from '../../src/relieve/worker/decode.ts';
+import { FINE, colOf, loadFine, rowOf, slopeAt } from './dem.mjs';
 
 const GRADOS = ['', 'Muy bajo', 'Bajo', 'Medio', 'Alto', 'Muy alto'];
 const num = v => (v === undefined || v === '' || v === '*' || v === 'N/D' ? null : +v);
 
-/* ---------- relieve ---------- */
-const data = f => zlib.gunzipSync(fs.readFileSync(path.join(ROOT, 'src/relieve/data', f)));
-const elev = decodeElev(new Uint8Array(data('elev.bin')), W, H);
-const muni = data('muni.bin');
-const dxm = STEP * KX * 1000, dzm = STEP * KZ * 1000;
-const slope = new Float32Array(W * H), tri = new Float32Array(W * H);
-for (let r = 1; r < H - 1; r++) for (let c = 1; c < W - 1; c++) {
-  const i = r * W + c, e = elev[i];
-  const gx = (elev[i + 1] - elev[i - 1]) / (2 * dxm), gz = (elev[i + W] - elev[i - W]) / (2 * dzm);
-  slope[i] = (Math.atan(Math.hypot(gx, gz)) * 180) / Math.PI;
-  // índice de rugosidad del terreno (Riley): diferencia media con los 8 vecinos
-  let s = 0;
-  for (const d of [-W - 1, -W, -W + 1, -1, 1, W - 1, W, W + 1]) s += Math.abs(elev[i + d] - e);
-  tri[i] = s / 8;
-}
-const T = Array.from({ length: 85 }, () => ({ n: 0, slope: 0, steep: 0, tri: 0, alt: 0, min: 1e9, max: -1e9 }));
-for (let i = 0; i < W * H; i++) {
-  const m = muni[i];
-  if (!m) continue;
-  const t = T[m];
-  t.n++; t.slope += slope[i]; t.tri += tri[i]; t.alt += elev[i];
-  if (slope[i] > 15) t.steep++;
-  t.min = Math.min(t.min, elev[i]); t.max = Math.max(t.max, elev[i]);
-}
-const cellKm2 = STEP * KX * STEP * KZ;
+/* ---------- relieve a 30 m ---------- */
+const relieve = readJSON(path.join(OUT, 'relieve_municipios.json'));
+const fine = await loadFine();
+const RAD = Math.round(1000 / fine.dxm);   // ~1 km en celdas finas
 /** pendiente media en un radio de ~1 km alrededor de un punto */
 const slopeAround = (lon, lat) => {
-  const c0 = Math.round(colOf(lon)), r0 = Math.round(rowOf(lat));
+  const c0 = Math.round(colOf(lon) * FINE), r0 = Math.round(rowOf(lat) * FINE);
   let s = 0, n = 0;
-  for (let r = r0 - 4; r <= r0 + 4; r++) for (let c = c0 - 4; c <= c0 + 4; c++) {
-    if (r < 1 || c < 1 || r >= H - 1 || c >= W - 1 || (r - r0) ** 2 + (c - c0) ** 2 > 16) continue;
-    s += slope[r * W + c]; n++;
+  for (let r = r0 - RAD; r <= r0 + RAD; r++) for (let c = c0 - RAD; c <= c0 + RAD; c++) {
+    if (r < 1 || c < 1 || r >= fine.h - 1 || c >= fine.w - 1 || (r - r0) ** 2 + (c - c0) ** 2 > RAD * RAD) continue;
+    s += slopeAt(fine.data, fine.w, fine.h, r * fine.w + c, fine.dxm, fine.dzm); n++;
   }
   return n ? s / n : 0;
 };
@@ -67,8 +46,7 @@ const iml = new Map();
 log(`CONAPO: ${imm.size} municipios, ${iml.size} localidades`);
 
 /* ---------- ITER ---------- */
-const iterZip = unzip(path.join(CACHE, SOURCES.iter.file), n => /conjunto_de_datos_iter.*\.csv$/i.test(n));
-const rows = parseCSV(decodeText(Object.values(iterZip)[0]));
+const rows = readIter(path.join(CACHE, SOURCES.iter.file));
 const locRows = rows.filter(r => r.MUN !== '000' && !['0000', '9998', '9999'].includes(r.LOC));
 const munRows = new Map(rows.filter(r => r.MUN !== '000' && r.LOC === '0000').map(r => [+r.MUN, r]));
 
@@ -88,9 +66,9 @@ log(`ITER: ${locs.length} localidades, ${locs.filter(l => l.gm).length} con grad
 
 const usvShare = readJSON(path.join(OUT, 'usv_municipios.json'));
 const municipios = Array.from({ length: 84 }, (_, k) => {
-  const id = k + 1, cve = `13${String(id).padStart(3, '0')}`, r = munRows.get(id), c = imm.get(cve), t = T[id];
+  const id = k + 1, cve = `13${String(id).padStart(3, '0')}`, r = munRows.get(id), c = imm.get(cve), t = relieve[k];
   const ls = locs.filter(l => l.muni === id);
-  const area = t.n * cellKm2, pob = num(r.POBTOT);
+  const area = t.area_km2, pob = num(r.POBTOT);
   const uso = usvShare[k];
   return {
     id, cve, nombre: r.NOM_MUN, pob, pob_fem: num(r.POBFEM), pob_mas: num(r.POBMAS),
@@ -102,8 +80,8 @@ const municipios = Array.from({ length: 84 }, (_, k) => {
     analf: c ? +c.ANALF.toFixed(1) : null, sbasc: c ? +c.SBASC.toFixed(1) : null, ovsde: c ? +c.OVSDE.toFixed(1) : null,
     ovsee: c ? +c.OVSEE.toFixed(1) : null, ovsae: c ? +c.OVSAE.toFixed(1) : null, ovpt: c ? +c.OVPT.toFixed(1) : null,
     vhac: c ? +c.VHAC.toFixed(1) : null, pl5000: c ? +c['PL.5000'].toFixed(1) : null, po2sm: c ? +c.PO2SM.toFixed(1) : null,
-    pendiente: +(t.slope / t.n).toFixed(2), pct_pend_15: +(100 * t.steep / t.n).toFixed(1), rugosidad: +(t.tri / t.n).toFixed(1),
-    alt_media: Math.round(t.alt / t.n), alt_min: Math.round(t.min), alt_max: Math.round(t.max),
+    pendiente: t.pendiente, pct_pend_15: t.pct_pend_15, pct_pend_30: t.pct_pend_30, rugosidad: t.rugosidad,
+    alt_media: t.alt_media, alt_min: t.alt_min, alt_max: t.alt_max,
     uso: Object.fromEntries(Object.entries(uso).filter(([k2, v]) => k2 !== 'id' && v >= 0.5)),
   };
 });
