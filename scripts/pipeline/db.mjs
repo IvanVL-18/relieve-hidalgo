@@ -81,6 +81,14 @@ await db.query(`comment on table relieve.servicios is 'Unidades médicas en oper
 await insert('servicios', ['fuente', 'clave', 'tipo', 'publico', 'nombre', 'detalle', 'cve_mun', 'lon', 'lat'], readJSON(path.join(OUT, 'servicios.json')));
 await db.query('create index on relieve.servicios (tipo, publico)');
 
+/* lugares para búsqueda: localidades fuera del ITER y colonias */
+if (exists('lugares.json')) {
+  await db.query(`create table relieve.lugares (id serial primary key, nombre text, tipo text, cve_mun char(5), cve_loc char(4), localidad text, lon double precision, lat double precision, negocios integer, fuente text)`);
+  await db.query(`comment on table relieve.lugares is 'Lugares que no están en relieve.localidades: localidades del catálogo de INEGI ausentes del ITER 2020 (deshabitadas o de 1–2 viviendas; fuente = catalogo) y asentamientos de las direcciones del DENUE (colonias, fraccionamientos, barrios…; fuente = denue), ubicados en la mediana de sus negocios'`);
+  await insert('lugares', ['nombre', 'tipo', 'cve_mun', 'cve_loc', 'localidad', 'lon', 'lat', 'negocios', 'fuente'], readJSON(path.join(OUT, 'lugares.json')));
+  await db.query('create index on relieve.lugares (cve_mun)');
+}
+
 /* uso de suelo */
 await db.query(`create table relieve.uso_suelo_grupos (id text primary key, nombre text, color text)`);
 await insert('uso_suelo_grupos', ['id', 'nombre', 'color'], USV_GROUPS);

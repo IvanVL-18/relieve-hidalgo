@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "data:fetch": "node scripts/pipeline/fetch.mjs",
-    "data": "node scripts/pipeline/build-relieve.mjs && node scripts/pipeline/build-usv.mjs && node scripts/pipeline/build-poblacion.mjs && node scripts/pipeline/build-servicios.mjs && node scripts/pipeline/build-vias.mjs && node scripts/pipeline/build-satelite.mjs",
+    "data": "node scripts/pipeline/build-relieve.mjs && node scripts/pipeline/build-usv.mjs && node scripts/pipeline/build-poblacion.mjs && node scripts/pipeline/build-servicios.mjs && node scripts/pipeline/build-lugares.mjs && node scripts/pipeline/build-vias.mjs && node scripts/pipeline/build-satelite.mjs",
     "data:db": "node scripts/pipeline/db.mjs",
     "shot": "node scripts/screenshot.mjs",
     "perf": "npm run build && node scripts/perf.mjs",

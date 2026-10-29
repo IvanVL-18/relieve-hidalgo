@@ -206,6 +206,8 @@
 .rh-lbl.rh-city i { width: 7px; height: 7px; background: var(--rh-accent); }
 .rh-lbl.rh-village { font-size: 0.68rem; color: #c9ced8; }
 .rh-lbl.rh-village i { width: 4px; height: 4px; }
+.rh-lbl.rh-hamlet { font-size: 0.64rem; color: #b3bac6; }
+.rh-lbl.rh-hamlet i { width: 3px; height: 3px; }
 .rh-lbl.rh-region { font-family: var(--rh-font-mono); font-size: 0.66rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--rh-muted); }
 .rh-lbl.rh-region i, .rh-lbl.rh-river i, .rh-lbl.rh-lake i { display: none; }
 .rh-lbl.rh-river, .rh-lbl.rh-lake { font-style: italic; color: var(--rh-water); font-size: 0.74rem; }

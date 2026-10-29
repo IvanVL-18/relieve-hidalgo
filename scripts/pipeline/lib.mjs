@@ -114,6 +114,37 @@ export class BinWriter {
  * tiles: Map de índice (ty·nx + tx) → Buffer.
  */
 export const PACK_MAGIC = 0x31504852;
+
+/** Clave para comparar nombres de lugares: sin acentos ni signos, en mayúsculas y sin «Colonia» o «Fracc.» al inicio. */
+export function placeKey(s) {
+  const k = (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+  const m = /^(?:COLONIA|COL|FRACCIONAMIENTO|FRACC|UNIDAD HABITACIONAL|U H|UH) (.+)$/.exec(k);
+  return m && !/^\d+$/.test(m[1]) ? m[1] : k;
+}
+
+const LOWER = new Set(['de', 'del', 'y', 'e', 'o', 'u', 'en', 'a', 'al', 'con', 'por', 'sin', 'para']);
+const ARTICLES = new Set(['el', 'la', 'los', 'las', 'lo']);
+const ACRONYMS = new Set(['INFONAVIT', 'FOVISSSTE', 'ISSSTE', 'IMSS', 'CTM', 'CROC', 'CROM', 'CNOP', 'CNC', 'FSTSE', 'SNTE', 'CFE', 'PEMEX', 'UAEH', 'SEP', 'SCT', 'SAHOP', 'INDECO', 'FOVI', 'FONHAPO', 'ISSFAM', 'PRI', 'PRD', 'UNAM', 'IPN', 'DIF', 'SEDENA', 'CONALEP']);
+
+/**
+ * Nombre en mayúsculas (como viene en el DENUE) escrito como nombre propio: «INFONAVIT VENTA PRIETA» → «INFONAVIT
+ * Venta Prieta», «LOMAS DE LA PLATA» → «Lomas de la Plata», «2DA SECCIÓN» → «2da Sección». Siglas y números romanos
+ * quedan en mayúsculas; «de», «y»… en minúsculas, y los artículos también si siguen a una de esas palabras.
+ */
+export function titleCase(s) {
+  let prev = '';
+  return s.trim().split(/\s+/).map((w, i) => {
+    const bare = w.toUpperCase().replace(/[^A-ZÁÉÍÓÚÜÑ0-9]/g, ''), low = w.toLowerCase();
+    const word = low.replace(/[^a-záéíóúüñ]/g, '');
+    let out;
+    if (ACRONYMS.has(bare) || (bare && /^X{0,3}(IX|IV|V?I{0,3})$/.test(bare))) out = w.toUpperCase();
+    else if (/^\d+[A-ZÁÉÍÓÚÑ]+$/.test(bare)) out = low;
+    else if (i > 0 && (LOWER.has(word) || (ARTICLES.has(word) && LOWER.has(prev)))) out = low;
+    else out = low.replace(/(^|[(\-"'.])([a-záéíóúüñ])/g, (_, a, b) => a + b.toUpperCase());
+    prev = word;
+    return out;
+  }).join(' ');
+}
 export function writePack(file, { kind, tileCells, nx, ny, px, f = 1 }, tiles) {
   const head = Buffer.alloc(32 + nx * ny * 8);
   [PACK_MAGIC, 1, kind, tileCells, nx, ny, px, f].forEach((v, k) => head.writeUInt32LE(v, k * 4));

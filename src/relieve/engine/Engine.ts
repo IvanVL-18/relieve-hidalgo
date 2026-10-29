@@ -17,7 +17,7 @@ import type { CompareHandle, CompareSpec, GridImage, MapApi, MapHit } from './ma
 import { Minimap } from './minimap';
 import { Overlays } from './overlays';
 import { Curtain, Rasters, makePalette, type RasterHandle } from './rasters';
-import { buildIndex, prettyRiver, search, type SearchItem } from './search';
+import { buildIndex, extraIndex, prettyRiver, search, type ExtraPlaces, type PlaceColumns, type SearchItem } from './search';
 import { mexicoDate, sunPosition, sunTimes, todayInMexico } from './sun';
 import { TerrainLod } from './terrain';
 import { TerrainService } from './terrainService';
@@ -863,6 +863,23 @@ export class ReliefEngine {
   }
   search(q: string) { return search(this.index, q); }
 
+  /**
+   * Suma al buscador las localidades del ITER sin etiqueta y los lugares de lugares.bin (localidades del catálogo de
+   * INEGI y colonias); las localidades pequeñas también se etiquetan al acercarse. Devuelve cuántos lugares agregó.
+   */
+  addPlaces(loc: PlaceColumns, lug: ExtraPlaces | null) {
+    const items = extraIndex(this.index, meta, loc, lug);
+    this.index.push(...items);
+    for (const it of items) if (it.kind === 'Localidad' && it.pop) this.placeItems.push({ t: it.n, lon: it.lon, lat: it.lat, kind: 3 });
+    if (this.labels) {
+      for (const it of items) if (it.kind === 'Localidad' && it.pop) this.labels.add({ t: it.n, lat: it.lat, lon: it.lon, k: 'hamlet', pri: 8, pop: it.pop });
+      this.labels.sort();
+      this.labelsDirty = true;
+      this.invalidate();
+    }
+    return items.length;
+  }
+
   /** Vista actual: punto que mira y cámara (para enlaces a vistas y capturas reproducibles). */
   getView(): View {
     const t = this.v2.copy(this.controls.target).applyMatrix4(this.inv.copy(this.model.matrixWorld).invert()), s = this.curSph();
@@ -880,7 +897,7 @@ export class ReliefEngine {
   /** Vuela a un resultado del buscador, lo marca y selecciona su municipio. */
   flyToItem(r: SearchItem) {
     if (!this.hf) return;
-    const dist = r.kind === 'Municipio' ? clamp(Math.sqrt(r.area ?? 1000) * 0.012, 0.35, 1.6) : r.rank >= 3 ? 0.32 : 0.55;
+    const dist = r.kind === 'Municipio' ? clamp(Math.sqrt(r.area ?? 1000) * 0.012, 0.35, 1.6) : r.kind === 'Colonia' ? 0.12 : r.rank >= 3 ? 0.2 : 0.55;
     this.flyTo(this.worldOf(r.lon, r.lat), { dist, polar: Math.min(this.curSph().phi, 0.95), ms: 1500 });
     this.labels?.setPin(r.n, r.lat, r.lon);
     this.select(r.m || 0);
@@ -1282,7 +1299,8 @@ export class ReliefEngine {
     let best: (typeof this.placeItems)[number] | null = null, bd = maxKm * maxKm;
     for (const p of this.placeItems) {
       const dx = (p.lon - lon) * g.KX, dz = (p.lat - lat) * g.KZ, d = dx * dx + dz * dz;
-      if (d < bd && (p.kind < 2 || d < (maxKm * 0.6) ** 2)) { bd = d; best = p; }
+      // ciudades y pueblos cuentan en todo el radio; las localidades de ≥ 500 hab. en el 60 % y las menores en el 40 %
+      if (d < bd && (p.kind < 2 || d < (maxKm * (p.kind === 2 ? 0.6 : 0.4)) ** 2)) { bd = d; best = p; }
     }
     return best ? { p: best, km: Math.sqrt(bd) } : null;
   }

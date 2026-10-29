@@ -17,8 +17,11 @@ que se puede incrustar en cualquier sitio React.
 - Ríos calculados del relieve y guiados por OpenStreetMap, presas, límites municipales de INEGI, curvas de nivel,
   localidades del censo y regiones. Las líneas se ven nítidas a cualquier acercamiento.
 - Sol en su posición real para la hora elegida; de noche se encienden las 4 690 localidades según su población.
-- Buscador, ficha por municipio (población, superficie, altitudes), minimapa, imagen descargable con créditos y
-  pantalla completa.
+- Buscador con los 84 municipios, las 5 297 localidades de INEGI (las 4 690 del censo y las deshabitadas o de una o
+  dos viviendas del catálogo de localidades), ~2 800 colonias, fraccionamientos y barrios, ríos y presas. De cerca se
+  etiquetan todas las localidades del censo.
+- Ficha por municipio (población, superficie, altitudes), minimapa, imagen descargable con créditos y pantalla
+  completa.
 
 **Análisis** (botón «Análisis»)
 
@@ -120,7 +123,8 @@ npm run visual              # las vuelve a capturar y marca en rojo lo que cambi
 Las referencias visuales dependen de la tarjeta gráfica: se comparan en el mismo equipo.
 
 La base de datos (esquema `relieve`) tiene municipios, localidades con minutos al servicio más cercano, servicios,
-uso de suelo, la red de ríos con orden de Strahler, la red vial como grafo y vistas para consultas frecuentes. El mapa
+lugares (localidades fuera del censo y colonias), uso de suelo, la red de ríos con orden de Strahler, la red vial como
+grafo y vistas para consultas frecuentes. El mapa
 no la necesita: lee archivos estáticos comprimidos. La base es para consultas, análisis y la API del laboratorio.
 
 ### Fuentes y licencias
@@ -130,7 +134,9 @@ no la necesita: lee archivos estáticos comprimidos. La base es para consultas, 
 | Elevación | INEGI, Continental relief 2016, y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS Open Data) | Términos de libre uso del INEGI; USGS: dominio público |
 | Límites municipales | INEGI, Marco Geoestadístico 2022 | Términos de libre uso del INEGI |
 | Uso del suelo y vegetación | INEGI, Serie VII 1:250 000 (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
-| Población, localidades de etiqueta y luces nocturnas | INEGI, Censo de Población y Vivienda 2020 (ITER) | Términos de libre uso del INEGI |
+| Población, localidades y luces nocturnas | INEGI, Censo de Población y Vivienda 2020 (ITER) | Términos de libre uso del INEGI |
+| Localidades que el censo agrupa o no tienen habitantes | INEGI, Catálogo Único de Claves de Áreas Geoestadísticas (servicio web) | Términos de libre uso del INEGI |
+| Colonias, fraccionamientos y barrios (buscador) | INEGI, DENUE: asentamiento de cada dirección, en la mediana de sus negocios | Términos de libre uso del INEGI |
 | Marginación | CONAPO, índices de marginación 2020 por municipio y localidad | Datos abiertos del Gobierno de México |
 | Unidades médicas | Secretaría de Salud, catálogo CLUES (agosto 2026) | Datos abiertos del Gobierno de México |
 | Escuelas | INEGI, DENUE | Términos de libre uso del INEGI |
@@ -144,6 +150,8 @@ Estas atribuciones aparecen en el mapa y en la imagen descargable, y deben conse
   curvas. Úsalos para comparar zonas, no como el tiempo exacto de un viaje.
 - El **DENUE** registra sobre todo escuelas urbanas. En zonas rurales faltan planteles, así que los tiempos a
   escuelas salen mayores a los reales.
+- Las **colonias** salen de las direcciones de los negocios del DENUE: una colonia sin negocios registrados no aparece
+  en el buscador, y su punto es el centro de sus negocios, no el de su polígono.
 - En el índice de **marginación** de CONAPO 2020, un valor menor significa mayor marginación. Los análisis lo
   invierten para que «más» se lea como «más marginación».
 - Las **pendientes** dependen de la resolución: medidas a 30 m son mucho mayores que a 270 m (en el estado, 40 % del

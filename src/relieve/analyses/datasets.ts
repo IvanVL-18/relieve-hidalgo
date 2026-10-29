@@ -32,6 +32,25 @@ export interface Localidades {
   nombre: string[];
 }
 
+/**
+ * Lugares extra para el buscador: localidades del catálogo de INEGI que no están en el ITER (deshabitadas o de 1–2
+ * viviendas) y asentamientos (colonias, fraccionamientos, barrios…) de las direcciones del DENUE.
+ */
+export interface Lugares {
+  n: number;
+  lon: Float32Array; lat: Float32Array;
+  /** clave de la localidad: la propia o aquella a la que pertenece el asentamiento */
+  loc: Uint16Array;
+  /** negocios del DENUE en el asentamiento (0 en localidades) */
+  negocios: Uint16Array;
+  /** índice en `localidades` de la localidad que se muestra junto al municipio (0 = ninguna) */
+  sub: Uint16Array;
+  muni: Uint8Array;
+  /** índice en `tipos` (0 = localidad) */
+  tipo: Uint8Array;
+  nombre: string[]; tipos: string[]; localidades: string[];
+}
+
 export interface Servicios {
   n: number;
   lon: Float32Array; lat: Float32Array;
@@ -76,6 +95,17 @@ export function decodeLocalidades(buf: Uint8Array): Localidades {
   };
 }
 
+export function decodeLugares(buf: Uint8Array): Lugares {
+  const r = new BinReader(buf);
+  r.magic(0x314e4852, 'lugares.bin');
+  const n = r.u32();
+  return {
+    n, lon: r.arr(Float32Array, n), lat: r.arr(Float32Array, n),
+    loc: r.arr(Uint16Array, n), negocios: r.arr(Uint16Array, n), sub: r.arr(Uint16Array, n),
+    muni: r.arr(Uint8Array, n), tipo: r.arr(Uint8Array, n), nombre: r.str(), tipos: r.str(), localidades: r.str(),
+  };
+}
+
 export function decodeServicios(buf: Uint8Array): Servicios {
   const r = new BinReader(buf);
   r.magic(0x31534852, 'servicios.bin');
@@ -103,6 +133,8 @@ export function createDatasets(resolve: ResolveUrl, meta: Meta, terrain?: () => 
     municipios: () => once('municipios', () => json<Municipio[]>(resolve('capas/municipios.json', new URL('../data/capas/municipios.json', import.meta.url).href))),
     localidades: () => once('localidades', async () => decodeLocalidades(await fetchBin(resolve('capas/localidades.bin', new URL('../data/capas/localidades.bin', import.meta.url).href)))),
     servicios: () => once('servicios', async () => decodeServicios(await fetchBin(resolve('capas/servicios.bin', new URL('../data/capas/servicios.bin', import.meta.url).href)))),
+    /** localidades del catálogo de INEGI fuera del ITER y colonias del DENUE (para el buscador) */
+    lugares: () => once('lugares', async () => decodeLugares(await fetchBin(resolve('capas/lugares.bin', new URL('../data/capas/lugares.bin', import.meta.url).href)))),
     /** worker de rutas (red vial): se crea al primer uso y lo comparten Accesibilidad y Localidades */
     router: () => (router ??= createRouter(resolve('capas/vias.bin', new URL('../data/capas/vias.bin', import.meta.url).href), meta)),
     /** relieve a la mejor resolución (30 m donde hay teselas, si no 90 m): elevación, perfil, pendiente, flujo, cuencas */

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import zlib from 'node:zlib';
 import { test } from 'node:test';
 import { gradientPlanes } from '../scripts/pipeline/dem.mjs';
-import { decodeElev, decodeVec } from '../src/relieve/worker/decode';
+import { decodeElev, decodeMuniFine, decodeVec } from '../src/relieve/worker/decode';
 import meta from '../src/relieve/data/meta.json' with { type: 'json' };
 
 const data = (name: string) => zlib.gunzipSync(fs.readFileSync(new URL(`../src/relieve/data/${name}`, import.meta.url)));
@@ -23,6 +23,15 @@ test('elev.bin: rejilla del visor; dentro del estado, el promedio de 270 m no re
   assert.equal(e.length, meta.W * meta.H);
   // fuera del estado la rejilla llega al volcán Jocotitlán (≈ 3 900 m, Estado de México)
   assert.ok(min >= meta.relief.min && max <= meta.relief.max && max > 3200, `min ${min}, max ${max}`);
+});
+
+test('los 84 municipios están en las rejillas de 270 m y de 50 m', () => {
+  const ids = (a: Uint8Array) => new Set(a.filter(v => v > 0));
+  const coarse = ids(data('muni.bin')), fine = ids(decodeMuniFine(data('muni-50m.bin')).data);
+  assert.equal(meta.names.length, 84);
+  assert.equal(coarse.size, 84);
+  assert.equal(fine.size, 84);
+  assert.ok(Math.max(...coarse) === 84 && Math.max(...fine) === 84);
 });
 
 test('vec.bin (versión 3): ríos, presas, límites, contorno y luces', () => {

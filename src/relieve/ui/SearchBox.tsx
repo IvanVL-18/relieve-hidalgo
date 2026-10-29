@@ -1,4 +1,4 @@
-import { useId, useState, type KeyboardEvent } from 'react';
+import { useEffect, useId, useState, type KeyboardEvent } from 'react';
 import type { SearchItem } from '../engine/search';
 import { IconSearch } from './icons';
 
@@ -6,14 +6,25 @@ interface Props {
   disabled: boolean;
   search: (q: string) => SearchItem[];
   onChoose: (r: SearchItem) => void;
+  /** cambia cuando el índice crece (localidades y colonias que llegan después del arranque) */
+  version?: number;
 }
 
-export function SearchBox({ disabled, search, onChoose }: Props) {
+export function SearchBox({ disabled, search, onChoose, version }: Props) {
   const id = useId();
   const [q, setQ] = useState('');
   const [results, setResults] = useState<SearchItem[]>([]);
   const [active, setActive] = useState(-1);
   const [open, setOpen] = useState(false);
+
+  // si el índice crece mientras hay una búsqueda escrita, se rehace sin abrir ni cerrar la lista
+  useEffect(() => {
+    if (!q.trim()) return;
+    const r = search(q);
+    setResults(r);
+    setActive(r.length ? 0 : -1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
 
   const update = (value: string) => {
     setQ(value);
@@ -42,7 +53,7 @@ export function SearchBox({ disabled, search, onChoose }: Props) {
         type="search"
         autoComplete="off"
         spellCheck={false}
-        placeholder={disabled ? 'Cargando lugares…' : 'Buscar municipio, localidad, río o presa'}
+        placeholder={disabled ? 'Cargando lugares…' : 'Buscar municipio, localidad, colonia o río'}
         aria-label="Buscar lugar"
         role="combobox"
         aria-expanded={open}
@@ -68,7 +79,7 @@ export function SearchBox({ disabled, search, onChoose }: Props) {
               onPointerEnter={() => setActive(i)}
             >
               <span>{r.n}</span>
-              <small>{r.sub && r.kind !== 'Municipio' ? `${r.kind} · ${r.sub}` : r.kind}</small>
+              <small>{r.sub && r.kind !== 'Municipio' ? `${r.tipo ?? r.kind} · ${r.sub}` : r.kind}</small>
             </li>
           ))}
         </ul>

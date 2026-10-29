@@ -72,6 +72,8 @@ const STAGE_TEXT: Record<LoadStage, string> = {
 };
 const fmtHour = (h: number) => { const m = Math.round(h * 60); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`; };
 const fmtN = (n: number) => Math.round(n).toLocaleString('es-MX').replace(/,/g, ' ');
+/** Corre fn cuando el navegador está libre (o a los 1.5 s donde no hay requestIdleCallback, como Safari). */
+const whenIdle = (fn: () => void) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 4000 }) : setTimeout(fn, 1500));
 const altRampCss = 'linear-gradient(90deg,' + ALT_STOPS_HEX.filter(s => s[0] <= 3300).map(([e, c]) => `${c} ${((e / 3300) * 100).toFixed(1)}%`).join(',') + ')';
 
 export function RelieveHidalgo(props: RelieveHidalgoProps) {
@@ -106,6 +108,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   const [analysis, setAnalysis] = useState<string | null>(props.initialAnalysis ?? null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [datasets, setDatasets] = useState<Datasets | null>(null);
+  const [placesVersion, setPlacesVersion] = useState(0);
   const [small, setSmall] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [selected, setSelected] = useState<MunicipioInfo | null>(null);
@@ -147,6 +150,13 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                 const e = engine;
                 data = createDatasets((name, bundled) => e.dataUrl(name, bundled), e.meta, () => e.terrain);
                 setDatasets(data);
+                // el buscador suma, con el navegador libre, las 4 690 localidades del ITER y las colonias del DENUE
+                const d = data;
+                whenIdle(() => {
+                  Promise.all([d.localidades(), d.lugares().catch(err => { console.warn('Buscador: sin colonias ni localidades del catálogo.', err); return null; })])
+                    .then(([loc, lug]) => { if (!cancelled) { e.addPlaces(loc, lug); setPlacesVersion(v => v + 1); } })
+                    .catch(err => console.warn('Buscador: no se pudieron cargar las localidades.', err));
+                });
               });
               propsRef.current.onReady?.(i);
             },
@@ -241,7 +251,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
               {info ? <>De <b>{fmtN(info.minElev)} m</b> a <b>{fmtN(info.maxElev)} m</b> sobre el nivel del mar</> : 'Elevación real · 84 municipios'}
             </div>
           </div>
-          {showSearch && <SearchBox disabled={!ready} search={q => eng()?.search(q) ?? []} onChoose={(r: SearchItem) => eng()?.flyToItem(r)} />}
+          {showSearch && <SearchBox disabled={!ready} version={placesVersion} search={q => eng()?.search(q) ?? []} onChoose={(r: SearchItem) => eng()?.flyToItem(r)} />}
           {showAnalyses && (
             <button type="button" className="rh-menu-btn" aria-expanded={menuOpen} aria-haspopup="dialog" disabled={!ready} onClick={() => setMenuOpen(!menuOpen)}>
               <IconGrid />Análisis{activeDef && <span>{activeDef.titulo}</span>}
@@ -340,7 +350,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                     {info && <div className="rh-mono rh-sunline">Hoy amanece a las {fmtHour(info.sunrise)} y anochece a las {fmtHour(info.sunset)}</div>}
                   </div>
                   <div className="rh-mono rh-keys">Arrastrar: girar · Clic derecho o Shift: mover · Rueda: acercar donde apuntas · Clic: municipio · Doble clic: ir ahí</div>
-                  <div className="rh-mono rh-credits">Elevación: INEGI (Continental relief 2016) y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS) · Ríos y presas: © OpenStreetMap y red de drenaje calculada del relieve · Límites: INEGI 2022 · Localidades: INEGI, Censo 2020{baseCredit && ` · ${baseCredit}`}</div>
+                  <div className="rh-mono rh-credits">Elevación: INEGI (Continental relief 2016) y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS) · Ríos y presas: © OpenStreetMap y red de drenaje calculada del relieve · Límites: INEGI 2022 · Localidades y colonias: INEGI (Censo 2020, catálogo de localidades y DENUE){baseCredit && ` · ${baseCredit}`}</div>
                 </div>
               )}
             </div>

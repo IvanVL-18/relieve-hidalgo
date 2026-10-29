@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Descarga las fuentes públicas a data-src/cache/ (se omiten las que ya están; --force para renovar).
- *   node scripts/pipeline/fetch.mjs [relieve agua iter denue conapo clues usv vias satelite]
+ *   node scripts/pipeline/fetch.mjs [relieve agua iter denue catalogo conapo clues usv vias satelite]
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -105,11 +105,21 @@ for (const k of ['iter', 'denue', 'imm', 'iml', 'clues', 'usv']) {
   const f = await download(SOURCES[k].url, SOURCES[k].file, { force });
   log('  ', path.relative(CACHE, f), (fs.statSync(f).size / 1048576).toFixed(1), 'MB');
 }
+if (want('catalogo')) {
+  log('catalogo …');
+  for (let m = 1; m <= 84; m++) {
+    const k = String(m).padStart(3, '0');
+    await download(SOURCES.catalogo.url.replace('{mun}', k), SOURCES.catalogo.file.replace('{mun}', k), { force });
+  }
+  log('   catálogo de localidades de los 84 municipios');
+}
 if (want('satelite')) {
   // z12 (≈ 36 m) para la imagen de todo el estado; z13 (≈ 18 m) solo sobre Hidalgo, para el detalle al acercarse
   await fetchTiles(SOURCES.satelite, 12, 'jpg');
   await fetchTiles(SOURCES.satelite, 13, 'jpg', nearHidalgo(13));
 }
 if (want('vias')) await fetchRoads();
-fs.writeFileSync(path.join(CACHE, 'fuentes.json'), JSON.stringify(Object.fromEntries(Object.entries(SOURCES).map(([k, s]) => [k, { ...s, descargado: new Date().toISOString().slice(0, 10) }])), null, 2));
+// fecha de descarga de cada fuente: la del archivo en la caché (no la de esta corrida, que puede no haber bajado nada)
+const fetchedOn = s => { const f = path.join(CACHE, s.file.replace('{mun}', '001')); return fs.existsSync(f) ? fs.statSync(f).mtime.toISOString().slice(0, 10) : null; };
+fs.writeFileSync(path.join(CACHE, 'fuentes.json'), JSON.stringify(Object.fromEntries(Object.entries(SOURCES).map(([k, s]) => [k, { ...s, descargado: fetchedOn(s) }])), null, 2));
 log('listo');
