@@ -2,10 +2,10 @@
 /**
  * Captura el visor en Edge/Chrome sin interfaz (con GPU) para revisar cambios visuales y tiempos de carga.
  *
- *   npm run shot                         → shots/main.png
- *   npm run shot -- --name=noche --hour=19.5 --w=1280 --h=800
- *   npm run shot -- --path=/?embed --name=embed
- *   npm run shot -- --script="api.topView()"   (código a ejecutar con window.__rh = motor)
+ *   pnpm shot      → shots/main.png
+ *   pnpm shot --name=noche --hour=19.5 --w=1280 --h=800
+ *   pnpm shot --path=/?embed --name=embed
+ *   pnpm shot --script="api.topView()"   (código a ejecutar con window.__rh = motor)
  *
  * Usa Edge (incluido en Windows). Para usar Chrome: --channel=chrome
  */

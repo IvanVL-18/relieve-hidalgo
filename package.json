@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Relieve 3D interactivo del estado de Hidalgo (three.js + React + TypeScript), listo para integrarse como componente.",
+  "devEngines": {
+    "packageManager": { "name": "pnpm", "version": ">=12.8.1", "onFail": "error" }
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -13,7 +16,7 @@
     "data": "node scripts/pipeline/build-relieve.mjs && node scripts/pipeline/build-usv.mjs && node scripts/pipeline/build-lluvia.mjs && node scripts/pipeline/build-laderas.mjs && node scripts/pipeline/build-solar.mjs && node scripts/pipeline/build-poblacion.mjs && node scripts/pipeline/build-movilidad.mjs && node scripts/pipeline/build-servicios.mjs && node scripts/pipeline/build-geoparque.mjs && node scripts/pipeline/build-escuelas.mjs && node scripts/pipeline/build-lugares.mjs && node scripts/pipeline/build-vias.mjs && node scripts/pipeline/build-satelite.mjs",
     "data:db": "node scripts/pipeline/db.mjs",
     "shot": "node scripts/screenshot.mjs",
-    "perf": "npm run build && node scripts/perf.mjs",
+    "perf": "pnpm run build && node scripts/perf.mjs",
     "visual": "node scripts/visual.mjs",
     "test": "node --experimental-transform-types --no-warnings --import ./tests/setup.mjs --test tests/*.test.ts"
   },

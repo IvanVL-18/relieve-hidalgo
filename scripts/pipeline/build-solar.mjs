@@ -32,7 +32,7 @@ const t0 = Date.now(), lap = msg => log(`${msg} (${((Date.now() - t0) / 1000).to
 const MONTH_KEYS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 const power = p => {
   const f = path.join(CACHE, SOURCES.solar.file.replace('{p}', p));
-  if (!fs.existsSync(f)) throw new Error(`Falta ${path.relative(CACHE, f)}. Corre npm run data:fetch solar`);
+  if (!fs.existsSync(f)) throw new Error(`Falta ${path.relative(CACHE, f)}. Corre pnpm data:fetch solar`);
   return new Map(JSON.parse(fs.readFileSync(f, 'utf8')).features.map(x => [x.geometry.coordinates.slice(0, 2).join(','), MONTH_KEYS.map(k => x.properties.parameter[p][k])]));
 };
 const ghiP = power('ALLSKY_SFC_SW_DWN'), dhiP = power('ALLSKY_SFC_SW_DIFF');
@@ -85,7 +85,7 @@ async function readAsc(zipFile, names, r0, r1, c0, c1) {
 
 /* nivel del año: Global Solar Atlas en la rejilla del visor (sus celdas de 0.0025° tienen el centro en nuestros nodos) */
 const atlasZip = path.join(CACHE, SOURCES.atlas_solar.file);
-if (!fs.existsSync(atlasZip)) throw new Error(`Falta ${SOURCES.atlas_solar.file}. Corre npm run data:fetch atlas_solar`);
+if (!fs.existsSync(atlasZip)) throw new Error(`Falta ${SOURCES.atlas_solar.file}. Corre pnpm data:fetch atlas_solar`);
 const AS = { lon0: -119, lat1: 33, step: 0.0025 };
 const ar0 = Math.round((AS.lat1 - GRID.lat0) / AS.step - 0.5), ac0 = Math.round((GRID.lon0 - AS.lon0) / AS.step - 0.5);
 const atlas = await readAsc(atlasZip, ['GHI.asc', 'DIF.asc'], ar0, ar0 + H - 1, ac0, ac0 + W - 1);

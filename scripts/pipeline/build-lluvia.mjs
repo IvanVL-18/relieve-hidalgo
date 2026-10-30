@@ -11,7 +11,7 @@ import { CACHE, H, LAYERS, W, colOf, fillPolygon, kb, log, rowOf, writeGz } from
 import { SOURCES } from './sources.mjs';
 
 const file = path.join(CACHE, SOURCES.lluvia.file);
-if (!fs.existsSync(file)) throw new Error(`Falta ${SOURCES.lluvia.file}: corre npm run data:fetch -- lluvia`);
+if (!fs.existsSync(file)) throw new Error(`Falta ${SOURCES.lluvia.file}: corre pnpm data:fetch lluvia`);
 const lluvia = JSON.parse(fs.readFileSync(file, 'utf8'));
 const out = new Uint8Array(W * H);
 // el centro de la celda r del rasterizador (r + 0.5) cae en el nodo r de la rejilla

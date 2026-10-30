@@ -5,7 +5,7 @@ export async function fetchBin(url: string): Promise<Uint8Array> {
   const res = await fetch(url);
   const name = url.split('/').pop()?.split('?')[0] ?? url;
   // un servidor de desarrollo o una SPA devuelven index.html cuando el archivo no existe
-  if (!res.ok || res.headers.get('content-type')?.includes('text/html')) throw new Error(`Falta el archivo de datos ${name} (${res.status}). Genéralo con npm run data.`);
+  if (!res.ok || res.headers.get('content-type')?.includes('text/html')) throw new Error(`Falta el archivo de datos ${name} (${res.status}). Genéralo con pnpm data.`);
   const buf = new Uint8Array(await res.arrayBuffer());
   if (buf[0] !== 0x1f || buf[1] !== 0x8b) return buf;
   const stream = new Blob([buf as BlobPart]).stream().pipeThrough(new DecompressionStream('gzip'));

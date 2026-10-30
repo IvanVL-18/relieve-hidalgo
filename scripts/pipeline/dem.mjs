@@ -40,7 +40,7 @@ export async function loadFine() {
   let newest = 0;
   for (let y = t.y0; y <= t.y1; y++) for (let x = t.x0; x <= t.x1; x++) {
     const f = tileFile(x, y);
-    if (!fs.existsSync(f)) throw new Error(`Falta la tesela de relieve ${path.relative(CACHE, f)}. Corre npm run data:fetch relieve`);
+    if (!fs.existsSync(f)) throw new Error(`Falta la tesela de relieve ${path.relative(CACHE, f)}. Corre pnpm data:fetch relieve`);
     newest = Math.max(newest, fs.statSync(f).mtimeMs);
   }
   if (fs.existsSync(cache) && fs.statSync(cache).size === g.w * g.h * 4 && fs.statSync(cache).mtimeMs > newest) {

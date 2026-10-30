@@ -68,7 +68,7 @@ writeJSON(path.join(OUT, 'usv_poligonos.json'), s7.map(f => ({ clave: f.properti
 /* ================= Serie VI (cambio de uso de suelo) ================= */
 // mismas claves que la Serie VII (más «ZU» y «VSa/MJ»): se usan sus nombres; si no está, se arma con la descripción
 const file6 = path.join(CACHE, SOURCES.usv6.file);
-if (!fs.existsSync(file6)) log('falta la Serie VI (npm run data:fetch usv6): se omite usv6.bin');
+if (!fs.existsSync(file6)) log('falta la Serie VI (pnpm data:fetch usv6): se omite usv6.bin');
 else {
   const s6 = JSON.parse(fs.readFileSync(file6, 'utf8')).features;
   const name7 = new Map(serie7.clases.map(c => [c.clave, c.nombre]));

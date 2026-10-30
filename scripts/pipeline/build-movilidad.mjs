@@ -18,7 +18,7 @@ import { SOURCES } from './sources.mjs';
 
 const t0 = Date.now(), lap = msg => log(`${msg} (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
 const zipFile = path.join(CACHE, SOURCES.muestra.file);
-if (!fs.existsSync(zipFile)) throw new Error(`Falta ${SOURCES.muestra.file}. Corre npm run data:fetch muestra`);
+if (!fs.existsSync(zipFile)) throw new Error(`Falta ${SOURCES.muestra.file}. Corre pnpm data:fetch muestra`);
 const text = new TextDecoder('latin1').decode(unzipSync(new Uint8Array(fs.readFileSync(zipFile)), { filter: f => f.name === 'Personas13.CSV' })['Personas13.CSV']);
 const lines = text.split('\n'), head = lines[0].trim().split(','), col = Object.fromEntries(head.map((h, i) => [h, i]));
 for (const k of ['MUN', 'FACTOR', 'ENT_PAIS_TRAB', 'MUN_TRAB', 'TIE_TRASLADO_TRAB', 'MED_TRASLADO_TRAB1', 'ENT_PAIS_ASI', 'MUN_ASI', 'TIE_TRASLADO_ESCU', 'MED_TRASLADO_ESC1']) {

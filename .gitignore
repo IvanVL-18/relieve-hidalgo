@@ -3,13 +3,17 @@ dist
 *.local
 .DS_Store
 
+# el gestor del proyecto es pnpm (pnpm-lock.yaml): que un npm o yarn por error no deje otro archivo de bloqueo
+package-lock.json
+yarn.lock
+
 # credenciales de la base de datos (plantilla en .env.example)
 .env
 
 # notas de trabajo locales del asistente
 CLAUDE.md
 
-# descargas y tablas intermedias: se regeneran con npm run data:fetch y npm run data
+# descargas y tablas intermedias: se regeneran con pnpm data:fetch y pnpm data
 data-src/cache
 data-src/out
 

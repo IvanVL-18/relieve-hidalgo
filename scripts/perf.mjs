@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Mide carga y fluidez del visor (build de producción) y, opcionalmente, de otra página para comparar.
- *   npm run build && node scripts/perf.mjs [--compare=ruta/al/original.html]
+ *   pnpm perf [--compare=ruta/al/original.html]   (compila y mide)
  * Métricas: tiempo hasta ver el relieve, bloqueo del hilo principal (tareas > 50 ms),
  * cuadros por segundo girando, cuadros dibujados en reposo y memoria JS.
  */

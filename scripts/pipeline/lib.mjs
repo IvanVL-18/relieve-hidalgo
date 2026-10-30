@@ -13,7 +13,7 @@ for (const d of [CACHE, OUT, LAYERS]) fs.mkdirSync(d, { recursive: true });
 
 /**
  * Rejilla del visor: centros de celda de 0.0025° (≈ 270 m) con 3 celdas de margen alrededor del estado.
- * Todas las capas se alinean a ella; cambiarla obliga a regenerar todo con npm run data.
+ * Todas las capas se alinean a ella; cambiarla obliga a regenerar todo con pnpm data.
  */
 export const GRID = { W: 756, H: 726, step: 0.0025, lon0: -99.86625, lat0: 21.40375 };
 const metaFile = path.join(ROOT, 'src/relieve/data/meta.json');

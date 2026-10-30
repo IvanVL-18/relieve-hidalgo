@@ -1,2 +1,19 @@
+# El proyecto se instala con pnpm (npm se niega por devEngines en package.json). Defensas contra paquetes
+# secuestrados en el registro de npm, que afectan a cualquier gestor:
+
+# Scripts de instalación de las dependencias: ninguno corre sin permiso. El único que trae uno es esbuild y solo
+# revisa su binario; Vite lo usa igual desde @esbuild/<plataforma>, así que se queda apagado.
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: false
+
+# No instalar versiones publicadas hace menos de un día (en minutos): las versiones maliciosas suelen detectarse y
+# retirarse en horas. Al fijarlo aquí la regla es estricta: si solo hay versiones más nuevas, la instalación falla.
+minimumReleaseAge: 1440
+
+# Rechazar una versión publicada con menos garantías que las anteriores (por ejemplo, sin la publicación de confianza
+# que sí tenían): es la huella típica de una cuenta robada.
+trustPolicy: no-downgrade
+trustPolicyExclude:
+  # Falsa alarma revisada el 2026-10-30: corrección de seguridad oficial de la rama 6 (2023-07-10), publicada a mano por
+  # lukekarrys, del equipo de npm, sin la procedencia que ya tenían las 7.5.x de su CI. La usa Babel (@vitejs/plugin-react).
+  - semver@6.3.1

@@ -2,9 +2,9 @@
 /**
  * Regresión visual: captura vistas fijas del visor (Edge sin interfaz, con GPU) y las compara con las de referencia.
  *
- *   npm run visual -- --update        guarda las referencias en shots/visual-base/ (antes de tocar el motor)
- *   npm run visual                    captura en shots/visual/ y compara: % de píxeles distintos y shots/visual-diff/
- *   npm run visual -- --only=pachuca,noche
+ *   pnpm visual --update    guarda las referencias en shots/visual-base/ (antes de tocar el motor)
+ *   pnpm visual             captura en shots/visual/ y compara: % de píxeles distintos y shots/visual-diff/
+ *   pnpm visual --only=pachuca,noche
  *
  * Las referencias dependen de la GPU y del navegador: se generan y se comparan en el mismo equipo (shots/ no se versiona).
  */

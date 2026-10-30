@@ -2,7 +2,7 @@
 /**
  * Relieve base del visor a partir de fuentes públicas (sustituye al script de Python del artefacto original).
  *
- * Entrada (npm run data:fetch relieve agua iter)
+ * Entrada (pnpm data:fetch relieve agua iter)
  *   cache/terrain/12/*.png        Terrain Tiles z12 (≈ 36 m; en México, INEGI Continental relief 2016)
  *   cache/inegi_hidalgo_2022.json municipios INEGI (se descarga si falta)
  *   cache/osm/agua_hidalgo.json   ríos, presas y lagos de OSM (si falta, la copia data-src/osm_agua.json.gz)

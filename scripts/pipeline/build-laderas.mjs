@@ -64,7 +64,7 @@ lap('pendiente a 30 m por píxel de 90 m');
 const cdir = path.join(CACHE, SOURCES.chirps.file), win = JSON.parse(fs.readFileSync(path.join(cdir, 'ventana.json'), 'utf8'));
 const anios = [];
 for (let y = SOURCES.chirps.anios[0]; y <= SOURCES.chirps.anios[1]; y++) if (fs.existsSync(path.join(cdir, `${y}.f32`))) anios.push(y);
-if (anios.length < 30) throw new Error(`CHIRPS: solo ${anios.length} años en la caché (npm run data:fetch -- chirps)`);
+if (anios.length < 30) throw new Error(`CHIRPS: solo ${anios.length} años en la caché (pnpm data:fetch chirps)`);
 const nc = win.cols * win.rows, sumMax = new Float64Array(nc), sumMax2 = new Float64Array(nc), sumTot = new Float64Array(nc), bad = new Uint8Array(nc);
 for (const y of anios) {
   const a = new Float32Array(Uint8Array.from(fs.readFileSync(path.join(cdir, `${y}.f32`))).buffer);

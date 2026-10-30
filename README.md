@@ -77,12 +77,17 @@ del agua, cámara guiada y grabación cuadro por cuadro (ver «Agregar un análi
 
 ## Usarlo
 
-Requiere Node 22.
+Requiere Node 22 y pnpm 12 (el proyecto no se deja instalar con npm).
 
 ```bash
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
+
+Se usa pnpm por sus defensas contra paquetes secuestrados en el registro de npm (ataques que afectan a cualquier
+gestor): no corre scripts de instalación de las dependencias sin permiso, no acepta versiones publicadas hace menos de
+un día y rechaza las que llegan con menos garantías que las anteriores, huella típica de una cuenta robada. La
+configuración y sus excepciones revisadas están en `pnpm-workspace.yaml`; `pnpm audit` revisa vulnerabilidades conocidas.
 
 La dirección de la página sigue a la vista, así que se puede copiar de la barra del navegador o con el botón de enlace.
 Parámetros: `?vista=lon,lat,km,inclinación,rumbo` (cámara; km = distancia al punto que mira), `?analisis=accesibilidad`
@@ -99,7 +104,8 @@ Los datos procesados ya vienen en `src/relieve/data/`, así que no hace falta de
 ## Integrarlo en otro proyecto React + TypeScript
 
 1. Copia `src/relieve/`.
-2. Instala `three`, `@types/three`, `@fontsource/familjen-grotesk` y `@fontsource/jetbrains-mono`.
+2. Instala, con el gestor de ese proyecto, `three`, `@types/three`, `@fontsource/familjen-grotesk` y
+   `@fontsource/jetbrains-mono`.
 3. Ponlo dentro de un contenedor con altura:
 
 ```tsx
@@ -171,9 +177,9 @@ ctx.map.addRaster({ kind: 'categorical', ...cuenca.grid, palette: [null, '#4fc3f
 ## Datos
 
 ```bash
-npm run data:fetch   # descarga las fuentes oficiales a data-src/cache (relieve, OSM, INEGI, CONAPO, CLUES…)
-npm run data         # las procesa y genera src/relieve/data
-npm run data:db      # las carga en PostgreSQL (configura .env a partir de .env.example)
+pnpm data:fetch   # descarga las fuentes oficiales a data-src/cache (relieve, OSM, INEGI, CONAPO, CLUES…)
+pnpm data         # las procesa y genera src/relieve/data
+pnpm data:db      # las carga en PostgreSQL (configura .env a partir de .env.example)
 ```
 
 Todo se regenera desde las fuentes públicas, incluido el relieve: el primer paso arma un relieve de ~30 m con las
@@ -187,9 +193,9 @@ llega por partes al acercarse.
 ### Pruebas
 
 ```bash
-npm test                    # pruebas unitarias (Node, sin dependencias extra)
-npm run visual -- --update  # guarda vistas de referencia del visor en shots/visual-base/
-npm run visual              # las vuelve a capturar y marca en rojo lo que cambió (shots/visual-diff/)
+pnpm test               # pruebas unitarias (Node, sin dependencias extra)
+pnpm visual --update    # guarda vistas de referencia del visor en shots/visual-base/
+pnpm visual             # las vuelve a capturar y marca en rojo lo que cambió (shots/visual-diff/)
 ```
 
 Las referencias visuales dependen de la tarjeta gráfica: se comparan en el mismo equipo.
@@ -295,7 +301,7 @@ src/relieve/           componente integrable
   worker/              arranque del relieve, worker de relieve (relieve fino, teselas y consultas de los análisis), clima de las nubes e imágenes de GOES
   data/                datos procesados que carga el mapa
 scripts/pipeline/      descarga y procesamiento de fuentes (relieve, hidrología, población…), carga a PostgreSQL
-scripts/               capturas (npm run shot), regresión visual (npm run visual) y rendimiento (npm run perf)
-tests/                 pruebas unitarias (npm test)
+scripts/               capturas (pnpm shot), regresión visual (pnpm visual) y rendimiento (pnpm perf)
+tests/                 pruebas unitarias (pnpm test)
 data-src/              copia de respaldo de ríos y presas (OSM); cache/ y out/ se generan
 ```

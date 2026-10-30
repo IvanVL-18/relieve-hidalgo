@@ -29,7 +29,7 @@ export class Pack {
   private async get(from: number, to: number): Promise<{ bytes: Uint8Array; whole: boolean }> {
     const res = await fetch(this.url, { headers: { Range: `bytes=${from}-${to}` } });
     const name = this.url.split('/').pop()?.split('?')[0] ?? this.url;
-    if (!res.ok || res.headers.get('content-type')?.includes('text/html')) throw new Error(`Falta el archivo de datos ${name} (${res.status}). Genéralo con npm run data.`);
+    if (!res.ok || res.headers.get('content-type')?.includes('text/html')) throw new Error(`Falta el archivo de datos ${name} (${res.status}). Genéralo con pnpm data.`);
     return { bytes: new Uint8Array(await res.arrayBuffer()), whole: res.status !== 206 };
   }
 
