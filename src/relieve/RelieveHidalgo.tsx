@@ -6,7 +6,7 @@ import '@fontsource/jetbrains-mono/latin-400.css';
 import '@fontsource/jetbrains-mono/latin-500.css';
 import './relieve.css';
 
-import { useCallback, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type Ref } from 'react';
 import type { Datasets } from './analyses/datasets';
 import { ANALYSES, SCHOOL_ANALYSES } from './analyses/registry';
 import type { SceneApi, SceneChange, ViewerMode } from './analyses/types';
@@ -19,7 +19,8 @@ import { BASE_MAPS, type BaseMapId } from './shared/basemaps';
 import { USV_GROUPS } from './shared/usv';
 import { AnalysisMenu, AnalysisPanel } from './ui/Analyses';
 import {
-  IconArrow, IconCamera, IconChevron, IconClose, IconCompass, IconExpand, IconGrid, IconLink, IconMinus, IconMoon, IconPause, IconPlay, IconPlus, IconShrink, IconSun, IconTarget,
+  AnalysisIcon, IconArrow, IconCamera, IconChevron, IconClose, IconCompass, IconExpand, IconGrid, IconHand, IconHome, IconLayers, IconLink, IconMap, IconMinus, IconMoon,
+  IconPause, IconPlay, IconPlus, IconShrink, IconSun, IconTarget,
 } from './ui/icons';
 import { SearchBox } from './ui/SearchBox';
 import { ALT_STOPS_HEX } from './worker/palette';
@@ -102,6 +103,14 @@ const LAYER_LABELS: [LayerKey, string][] = [
 const STAGE_TEXT: Record<LoadStage, string> = {
   download: 'Descargando el relieve…', build: 'Levantando el relieve…', gpu: 'Preparando la vista…',
 };
+/** «Cómo moverse en el mapa» con ratón y en pantallas táctiles */
+const HOWTO_MOUSE: [string, string][] = [
+  ['Arrastrar', 'girar el mapa'], ['Clic derecho o Shift + arrastrar', 'mover'], ['Rueda', 'acercar hacia donde apuntas'],
+  ['Clic', 'elegir un municipio'], ['Doble clic', 'volar a ese punto'], ['Flechas, + y −', 'moverse y acercar con el teclado'], ['/', 'buscar un lugar'],
+];
+const HOWTO_TOUCH: [string, string][] = [
+  ['Un dedo', 'girar el mapa'], ['Dos dedos', 'acercar, alejar y mover'], ['Tocar', 'elegir un municipio'], ['Doble toque', 'volar a ese punto'],
+];
 const fmtHour = (h: number) => { const m = Math.round(h * 60); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`; };
 /** «11 sep» (fecha en México) */
 const fmtDay = (ms: number) => new Date(ms - 6 * 3600e3).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', timeZone: 'UTC' });
@@ -167,12 +176,23 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   const [hint, setHint] = useState('');
   const [full, setFull] = useState(false);
   const hintTimer = useRef(0);
+  // minimapa contraído hasta que se pida; leyenda abierta salvo en pantallas bajas
+  const [miniOpen, setMiniOpen] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(true);
+  // con un análisis abierto la leyenda del mapa base empieza contraída: los colores que importan son los del análisis
+  const [legendAOpen, setLegendAOpen] = useState(false);
+  // panel del análisis contraído (solo su encabezado) y vista desde arriba (2D) o inclinada (3D)
+  const [aMin, setAMin] = useState(false);
+  const [is2D, setIs2D] = useState(false);
+  // cómo moverse: se muestra al llegar hasta que la persona toca el mapa
+  const [tips, setTips] = useState(true);
 
   // el motor (y three.js) se carga aparte para no pesar en la página que lo incrusta
   useEffect(() => {
     let cancelled = false, engine: ReliefEngine | null = null;
     const root = rootRef.current!;
     if (root.clientWidth < 640 || root.clientHeight < 760 || firstAnalysis) setPanelOpen(false);
+    if (root.clientWidth < 640 || root.clientHeight < 600) setLegendOpen(false);
     setSmall(root.clientWidth < 640);
     let data: Datasets | null = null;
     import('./engine/Engine').then(({ ReliefEngine }) => {
@@ -280,7 +300,13 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   const emitTimer = useRef(0);
   function emitView() {
     clearTimeout(emitTimer.current);
-    emitTimer.current = window.setTimeout(() => { const s = viewState(); if (s) propsRef.current.onViewChange?.(s); }, 250);
+    emitTimer.current = window.setTimeout(() => {
+      const s = viewState();
+      if (!s) return;
+      // con la cámara casi vertical, el botón «2D» queda marcado
+      if (s.view) setIs2D(s.view.polar < 12);
+      propsRef.current.onViewChange?.(s);
+    }, 250);
   }
   useEffect(() => { if (ready) emitView(); }, [ready, baseMap, hour, exag, layers.clouds, clouds.kind, clouds.day, selected, analysis, params]);
   useEffect(() => () => clearTimeout(emitTimer.current), []);
@@ -349,6 +375,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
     linkParams.current = null;
     setAnalysis(id);
     setMenuOpen(false);
+    setAMin(false);
     if (id) setPanelOpen(false);
     propsRef.current.onAnalysisChange?.(id);
   }, []);
@@ -370,10 +397,43 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   const engine = eng();
   const baseCredit = BASE_MAPS.find(b => b.id === baseMap)?.credit;
   const activeDef = analysis ? ANALYSES.find(a => a.id === analysis && a.load) : undefined;
+  const school = mode === 'escuelas';
+  const menuLabel = school ? 'Temas' : 'Análisis';
+  const view2D = () => { setIs2D(true); eng()?.topView(); };
+  // 3D: la misma vista, inclinada como la inicial (≈ 55°)
+  const view3D = () => {
+    const e = eng(), v = e?.getView();
+    if (!e || !v) return;
+    setIs2D(false);
+    e.setView({ ...v, polar: 55 }, 900);
+  };
+  // en el celular las hojas de abajo se turnan: capas y luz o el análisis
+  const tabAnalysis = () => {
+    if (!activeDef) { setMenuOpen(true); return; }
+    if (panelOpen) { setPanelOpen(false); setAMin(false); } else setAMin(!aMin);
+  };
+  const touchUi = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  useEffect(() => {
+    if (!ready || !tips) return;
+    const t = setTimeout(() => setTips(false), 16000);
+    return () => clearTimeout(t);
+  }, [ready, tips]);
+  const hideTips = () => { if (tips) setTips(false); };
+  // «/» lleva al buscador (como en muchos sitios), si no se está escribiendo en otro campo
+  const onRootKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if ((e.target as HTMLElement).closest('input, textarea, select, [contenteditable="true"]')) return;
+    const input = rootRef.current?.querySelector<HTMLInputElement>('.rh-search input');
+    if (input && !input.disabled) { e.preventDefault(); input.focus(); }
+  };
+  const baseInfo = BASE_LEGEND[baseMap];
+  const legendBody = activeDef ? legendAOpen : legendOpen;
+  const toggleLegend = () => (activeDef ? setLegendAOpen(!legendAOpen) : setLegendOpen(!legendOpen));
+  const canFull = typeof document !== 'undefined' && document.fullscreenEnabled;
 
   return (
-    <div ref={rootRef} className={'rh-root' + (mode !== 'normal' ? ' rh-' + mode : '') + (className ? ' ' + className : '')} style={style} role="region" aria-label={title}>
-      <div className="rh-stage" ref={stageRef} />
+    <div ref={rootRef} className={'rh-root' + (mode !== 'normal' ? ' rh-' + mode : '') + (className ? ' ' + className : '')} style={style} role="region" aria-label={title} onKeyDown={onRootKey}>
+      <div className="rh-stage" ref={stageRef} onPointerDown={hideTips} onWheel={hideTips} />
       <div className="rh-labels" ref={labelsRef} aria-hidden="true" />
 
       {stage !== 'ready' && (
@@ -383,105 +443,108 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
       )}
       <div className={'rh-hint' + (hint ? ' on' : '')} role="status" aria-live="polite">{hint}</div>
 
-      <div className="rh-hud">
-        <div className="rh-tl">
+      <div className={'rh-hud' + (activeDef ? ' rh-has-analysis' : '') + (activeDef && aMin ? ' rh-a-min' : '') + (panelOpen ? ' rh-layers-open' : '') + (selected && !activeDef ? ' rh-has-card' : '')}>
+        <header className="rh-top">
           <div className="rh-mark">
             <div className="rh-title" role="heading" aria-level={2}>{title}</div>
-            <div className="rh-mono">
+            <div className="rh-sub">
               {info ? <>De <b>{fmtN(info.minElev)} m</b> a <b>{fmtN(info.maxElev)} m</b> sobre el nivel del mar</> : 'Elevación real · 84 municipios'}
             </div>
           </div>
           {showSearch && <SearchBox disabled={!ready} version={placesVersion} search={q => eng()?.search(q) ?? []} onChoose={(r: SearchItem) => eng()?.flyToItem(r)} />}
-          {showAnalyses && !kiosk && (
-            <button type="button" className="rh-menu-btn" aria-expanded={menuOpen} aria-haspopup="dialog" disabled={!ready} onClick={() => setMenuOpen(!menuOpen)}>
-              <IconGrid />{mode === 'escuelas' ? 'Temas' : 'Análisis'}{activeDef && <span>{activeDef.titulo}</span>}
+          <div className="rh-tools" role="group" aria-label="Guardar y compartir">
+            {!kiosk && (
+              <button type="button" className="rh-tool" title="Descargar una imagen PNG de esta vista" aria-label="Descargar imagen de la vista" disabled={!ready} onClick={download}>
+                <IconCamera /><span>Imagen</span>
+              </button>
+            )}
+            {!kiosk && showShare && (
+              <button type="button" className="rh-tool" title="Copiar un enlace que abre esta misma vista" aria-label="Copiar enlace a esta vista" disabled={!ready} onClick={share}>
+                <IconLink /><span>Compartir</span>
+              </button>
+            )}
+            {canFull && (
+              <button type="button" className="rh-tool rh-tool-icon" title={full ? 'Salir de pantalla completa' : 'Pantalla completa'} aria-label={full ? 'Salir de pantalla completa' : 'Pantalla completa'} onClick={toggleFull}>
+                {full ? <IconShrink /> : <IconExpand />}
+              </button>
+            )}
+          </div>
+        </header>
+
+        <div className="rh-side">
+          {showAnalyses && !kiosk && !activeDef && (
+            <button type="button" className="rh-launch" aria-haspopup="dialog" aria-expanded={menuOpen} disabled={!ready} onClick={() => setMenuOpen(true)}>
+              <span className="rh-launch-icon"><IconGrid /></span>
+              <span className="rh-launch-text">
+                <b>{school ? 'Temas para clase' : 'Análisis'}</b>
+                <em>{school ? 'Regiones, relieve, clima, agua y preguntas' : 'Población, servicios, agua y riesgo, planeación y difusión'}</em>
+              </span>
+              <IconChevron />
             </button>
           )}
           {activeDef && engine && datasets && (
             <AnalysisPanel id={activeDef.id} engine={engine} datasets={datasets} small={small} onClose={kiosk ? undefined : () => openAnalysis(null)}
-              initialParams={linkParams.current} onParams={setParams} scene={sceneApi} mode={mode} />
+              initialParams={linkParams.current} onParams={setParams} scene={sceneApi} mode={mode}
+              minimized={aMin} onMinimize={kiosk ? undefined : v => { setAMin(v); if (!v && small) setPanelOpen(false); }}
+              onBrowse={kiosk || !showAnalyses ? undefined : () => setMenuOpen(true)} browseLabel={menuLabel} />
           )}
           {!activeDef && selected && (
             <section className="rh-card" aria-label={`Municipio ${selected.name}`}>
               <header>
                 <div>
+                  <div className="rh-eyebrow">Municipio · clave INEGI {selected.code}</div>
                   <div className="rh-card-title">{selected.name}</div>
-                  <div className="rh-mono">Clave INEGI {selected.code}</div>
                 </div>
-                <button type="button" className="rh-icon-btn" aria-label="Quitar selección" onClick={() => eng()?.select(0)}><IconClose /></button>
+                <button type="button" className="rh-icon-btn" title="Quitar selección" aria-label="Quitar selección" onClick={() => eng()?.select(0)}><IconClose /></button>
               </header>
               <dl>
                 <div><dt>Población 2020</dt><dd>{fmtN(selected.poblacion)}</dd></div>
                 <div><dt>Superficie</dt><dd>{selected.areaKm2.toLocaleString('es-MX', { maximumFractionDigits: 1 }).replace(/,/g, ' ')} km²</dd></div>
-                <div><dt>Altitud</dt><dd>{fmtN(selected.minElev)}–{fmtN(selected.maxElev)} m</dd></div>
-                <div><dt>Media</dt><dd>{fmtN(selected.meanElev)} m</dd></div>
+                <div><dt>Altitud</dt><dd>{fmtN(selected.minElev)} – {fmtN(selected.maxElev)} m</dd></div>
+                <div><dt>Altitud media</dt><dd>{fmtN(selected.meanElev)} m</dd></div>
                 <div><dt>Localidades</dt><dd>{fmtN(selected.localidades)}</dd></div>
               </dl>
-              <button type="button" className="rh-text-btn" onClick={() => eng()?.select(selected.id, true)}><IconTarget />Acercar</button>
+              <button type="button" className="rh-text-btn" onClick={() => eng()?.select(selected.id, true)}><IconTarget />Acercar al municipio</button>
             </section>
           )}
-        </div>
-
-        <div className="rh-tr">
-          {showLegend && !kiosk && (
-            <div className={'rh-legend' + (baseMap === 'usodesuelo' ? ' rh-legend-wide' : '')} aria-label={baseMap === 'altitud' ? 'Escala de altitud' : baseMap === 'usodesuelo' ? 'Uso del suelo y vegetación' : 'Imagen satelital'}>
-              {baseMap === 'altitud' && (
-                <>
-                  <div className="rh-mono">Altitud · m s. n. m.</div>
-                  <div className="rh-bar" style={{ background: altRampCss }} />
-                  <div className="rh-ticks rh-mono"><span>0</span><span>1 000</span><span>2 000</span><span>3 000</span></div>
-                </>
-              )}
-              {baseMap === 'usodesuelo' && (
-                <>
-                  <div className="rh-mono">Uso de suelo · INEGI Serie VII</div>
-                  <ul className="rh-key rh-key2">{USV_GROUPS.map(g => <li key={g.id}><i style={{ background: g.color }} />{g.nombre}</li>)}</ul>
-                  <div className="rh-mono rh-key-note">Más claro: vegetación secundaria</div>
-                </>
-              )}
-              {baseMap === 'satelite' && <div className="rh-mono">Sentinel-2 · 2016</div>}
-            </div>
-          )}
-          <div className="rh-rail" role="group" aria-label="Navegación">
-            {/* en el kiosco solo queda la pantalla completa */}
-            {!kiosk && <>
-            <button type="button" title="Acercar (+)" aria-label="Acercar" onClick={() => eng()?.zoomBy(0.6)}><IconPlus /></button>
-            <button type="button" title="Alejar (−)" aria-label="Alejar" onClick={() => eng()?.zoomBy(1.6)}><IconMinus /></button>
-            <div className="rh-sep" />
-            <button type="button" title="Orientar al norte (N)" aria-label="Orientar al norte" onClick={() => eng()?.northUp()}><span className="rh-needle" ref={needleRef}><IconCompass /></span></button>
-            <button type="button" title="Vista en planta (T)" aria-label="Vista desde arriba" onClick={() => eng()?.topView()}>2D</button>
-            <button type="button" title="Vista inicial (R)" aria-label="Volver a la vista inicial" onClick={() => eng()?.goHome()}>3D</button>
-            <div className="rh-sep" />
-            <button type="button" title="Descargar imagen" aria-label="Descargar imagen de la vista" disabled={!ready} onClick={download}><IconCamera /></button>
-            {showShare && <button type="button" title="Copiar enlace a esta vista" aria-label="Copiar enlace a esta vista" disabled={!ready} onClick={share}><IconLink /></button>}
-            </>}
-            {typeof document !== 'undefined' && document.fullscreenEnabled && (
-              <button type="button" title={full ? 'Salir de pantalla completa' : 'Pantalla completa'} aria-label={full ? 'Salir de pantalla completa' : 'Pantalla completa'} onClick={toggleFull}>{full ? <IconShrink /> : <IconExpand />}</button>
-            )}
-          </div>
-        </div>
-
-        {showPanel && !kiosk && (
-          <div className="rh-bl">
-            <div className="rh-panel">
+          {showPanel && !kiosk && (
+            <section className={'rh-panel' + (panelOpen ? ' rh-open' : '')} aria-label="Capas y luz">
               <div className="rh-panel-head">
-                <button type="button" aria-expanded={panelOpen} onClick={() => setPanelOpen(!panelOpen)}><IconChevron />Capas y luz</button>
-                <span className="rh-mono rh-zoom" ref={zoomRef}>—</span>
+                <button type="button" aria-expanded={panelOpen} aria-controls="rh-panel-body" onClick={() => setPanelOpen(!panelOpen)}>
+                  <IconLayers />
+                  <span className="rh-panel-name">Capas y luz</span>
+                  <span className="rh-panel-sum">{BASE_MAPS.find(b => b.id === baseMap)?.label} · {isNight ? <IconMoon /> : <IconSun />}{fmtHour(hour)}</span>
+                  <IconChevron />
+                </button>
               </div>
               {panelOpen && (
-                <div className="rh-panel-body">
-                  <div className="rh-seg rh-seg3" role="radiogroup" aria-label="Mapa base" aria-busy={baseLoading}>
-                    {BASE_MAPS.map(b => (
-                      <button key={b.id} type="button" role="radio" aria-checked={baseMap === b.id} onClick={() => chooseBase(b.id)}>{b.label}</button>
-                    ))}
+                <div className="rh-panel-body" id="rh-panel-body">
+                  <div className="rh-psec">
+                    <div className="rh-psec-title">Mapa base</div>
+                    <div className="rh-basemaps" role="radiogroup" aria-label="Mapa base" aria-busy={baseLoading}>
+                      {BASE_MAPS.map(b => (
+                        <button key={b.id} type="button" role="radio" aria-checked={baseMap === b.id} title={BASE_LEGEND[b.id].hint} onClick={() => chooseBase(b.id)}>
+                          <i className={'rh-bm-' + b.id} aria-hidden="true" />{b.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="rh-cap">{BASE_LEGEND[baseMap].hint}</p>
+                    {/* en el celular la leyenda va aquí (no hay espacio para la flotante) */}
+                    {showLegend && <div className="rh-legend-inline"><BaseLegend baseMap={baseMap} /></div>}
                   </div>
-                  <div className="rh-toggles" role="group" aria-label="Capas">
-                    {LAYER_LABELS.map(([k, t]) => (
-                      <button key={k} type="button" aria-pressed={layers[k]} onClick={() => toggleLayer(k)}>{t}</button>
-                    ))}
+
+                  <div className="rh-psec">
+                    <div className="rh-psec-title">Capas</div>
+                    <div className="rh-toggles rh-checks" role="group" aria-label="Capas">
+                      {LAYER_LABELS.map(([k, t]) => (
+                        <button key={k} type="button" aria-pressed={layers[k]} onClick={() => toggleLayer(k)}>{t}</button>
+                      ))}
+                    </div>
                   </div>
+
                   {layers.clouds && (
-                    <div className="rh-sky" role="group" aria-label="Nubes">
+                    <div className="rh-psec rh-sky" role="group" aria-label="Nubes">
+                      <div className="rh-psec-title">Nubes</div>
                       {liveAllowed && (
                         <div className="rh-seg rh-seg2" role="radiogroup" aria-label="Origen de las nubes">
                           <button type="button" role="radio" aria-checked={!isLive} title="Nubes ilustrativas: eliges el tipo de cielo, la cantidad y el viento" onClick={() => setSource(false)}>Simuladas</button>
@@ -500,10 +563,10 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                             <span className={'rh-live-dot rh-live-' + (live?.state ?? 'loading')} aria-hidden="true" />
                             <div className="rh-live-text">
                               {!live || (live.state === 'loading' && !live.loaded) ? <b>Descargando la imagen del satélite…</b>
-                                : live.state === 'error' ? <><b>No se pudo descargar la imagen</b><span className="rh-mono">{live.message ?? 'Revisa tu conexión'} · <button type="button" className="rh-link" onClick={retryLive}>Reintentar</button></span></>
+                                : live.state === 'error' ? <><b>No se pudo descargar la imagen</b><span className="rh-cap">{live.message ?? 'Revisa tu conexión'} · <button type="button" className="rh-link" onClick={retryLive}>Reintentar</button></span></>
                                 : <>
                                   <b>{live.shown !== undefined ? `Imagen de las ${fmtHour(mxHour(live.shown))}` : 'Imagen del satélite'}</b>
-                                  <span className="rh-mono">
+                                  <span className="rh-cap">
                                     {pastDay ? fmtDate(pastDay)
                                       : live.latest !== undefined && (Date.now() - live.latest < 864e5 ? `Última: ${fmtHour(mxHour(live.latest))}, hace ${fmtAgo(live.latest)}` : `${fmtDay(live.latest)}, última de las ${fmtHour(mxHour(live.latest))}`)}
                                     {live.total > 1 && live.loaded < live.total && ` · ${live.loaded}/${live.total} imágenes`}
@@ -547,47 +610,124 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                           </div>
                         </>
                       )}
-                      <div className="rh-mono rh-sky-note">{activeDef ? 'Ocultas mientras hay un análisis abierto' : isLive ? 'La hora del sol elige la imagen' : skyFor(clouds.kind, hour).text}</div>
+                      <p className="rh-cap">{activeDef ? 'Ocultas mientras hay un análisis abierto.' : isLive ? 'La hora del sol elige la imagen del satélite.' : skyFor(clouds.kind, hour).text || 'Cambian con la hora del día.'}</p>
                     </div>
                   )}
-                  <div className="rh-ctl">
-                    <div className="rh-head"><label htmlFor="rh-exag">Exageración vertical</label><output htmlFor="rh-exag">{exag.toFixed(1)}×</output></div>
-                    <input id="rh-exag" type="range" min={1} max={6} step={0.1} value={exag}
-                      onChange={e => { const v = +e.target.value; setExag(v); eng()?.setExaggeration(v); }} />
-                  </div>
-                  <div className="rh-ctl">
-                    <div className="rh-head">
-                      <label htmlFor="rh-hour">Hora del sol</label>
-                      <output htmlFor="rh-hour">{isNight ? <IconMoon /> : <IconSun />}{fmtHour(hour)}</output>
+
+                  <div className="rh-psec">
+                    <div className="rh-psec-title">Relieve y luz</div>
+                    <div className="rh-ctl">
+                      <div className="rh-head"><label htmlFor="rh-exag">Exageración vertical</label><output htmlFor="rh-exag">{exag.toFixed(1)}×</output></div>
+                      <input id="rh-exag" type="range" min={1} max={6} step={0.1} value={exag}
+                        onChange={e => { const v = +e.target.value; setExag(v); eng()?.setExaggeration(v); }} />
+                      <p className="rh-cap">{exag < 1.05 ? 'Altura real: así de altos son los cerros respecto a su ancho.' : `Los cerros se ven ${exag.toFixed(1)} veces más altos que en la realidad, para que el relieve se note.`}</p>
                     </div>
-                    <input id="rh-hour" type="range" min={5} max={20.5} step={0.05} value={hour}
-                      style={sun ? ({ '--rh-rise': `${((sun.sunrise - 5) / 15.5) * 100}%`, '--rh-set': `${((sun.sunset - 5) / 15.5) * 100}%` } as CSSProperties) : undefined}
-                      className="rh-hour"
-                      onChange={e => { const v = +e.target.value; setHour(v); eng()?.setHour(v); }} />
-                    {isLive && layers.clouds && live?.firstHour !== undefined && live.lastHour !== undefined && (
-                      <div className="rh-live-track" title="Horas del día con imagen del satélite" aria-hidden="true">
-                        <i style={{ left: `${((Math.max(5, live.firstHour) - 5) / 15.5) * 100}%`, width: `${((Math.min(20.5, live.lastHour) - Math.max(5, live.firstHour)) / 15.5) * 100}%` }} />
+                    <div className="rh-ctl">
+                      <div className="rh-head">
+                        <label htmlFor="rh-hour">Hora del sol</label>
+                        <output htmlFor="rh-hour">{isNight ? <IconMoon /> : <IconSun />}{fmtHour(hour)}</output>
                       </div>
-                    )}
-                    {sun && <div className="rh-mono rh-sunline">{pastDay && sun !== info
-                      ? `El ${fmtDate(pastDay, false)} amaneció a las ${fmtHour(sun.sunrise)} y anocheció a las ${fmtHour(sun.sunset)}`
-                      : `Hoy amanece a las ${fmtHour(sun.sunrise)} y anochece a las ${fmtHour(sun.sunset)}`}</div>}
+                      <input id="rh-hour" type="range" min={5} max={20.5} step={0.05} value={hour}
+                        style={sun ? ({ '--rh-rise': `${((sun.sunrise - 5) / 15.5) * 100}%`, '--rh-set': `${((sun.sunset - 5) / 15.5) * 100}%` } as CSSProperties) : undefined}
+                        className="rh-hour"
+                        onChange={e => { const v = +e.target.value; setHour(v); eng()?.setHour(v); }} />
+                      {isLive && layers.clouds && live?.firstHour !== undefined && live.lastHour !== undefined && (
+                        <div className="rh-live-track" title="Horas del día con imagen del satélite" aria-hidden="true">
+                          <i style={{ left: `${((Math.max(5, live.firstHour) - 5) / 15.5) * 100}%`, width: `${((Math.min(20.5, live.lastHour) - Math.max(5, live.firstHour)) / 15.5) * 100}%` }} />
+                        </div>
+                      )}
+                      <p className="rh-cap">
+                        {sun ? (pastDay && sun !== info
+                          ? `El ${fmtDate(pastDay, false)} amaneció a las ${fmtHour(sun.sunrise)} y anocheció a las ${fmtHour(sun.sunset)}.`
+                          : `Sombras con el sol real de hoy: amanece a las ${fmtHour(sun.sunrise)} y anochece a las ${fmtHour(sun.sunset)}. De noche se encienden las localidades.`)
+                          : 'Sombras con el sol real de hoy.'}
+                      </p>
+                    </div>
                   </div>
-                  <div className="rh-mono rh-keys">Arrastrar: girar · Clic derecho o Shift: mover · Rueda: acercar donde apuntas · Clic: municipio · Doble clic: ir ahí</div>
-                  <div className="rh-mono rh-credits">Elevación: INEGI (Continental relief 2016) y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS) · Ríos y presas: © OpenStreetMap y red de drenaje calculada del relieve · Límites: INEGI 2022 · Localidades y colonias: INEGI (Censo 2020, catálogo de localidades y DENUE){layers.clouds && (isLive ? ` · Nubes ${pastDay ? 'del ' + fmtDate(pastDay, false) : 'de hoy'}: satélite GOES-Este (NOAA), vía NASA GIBS (ESDIS); alturas estimadas por la temperatura de la cima` : ' · Nubes: simuladas, según la lluvia media anual de INEGI')}{baseCredit && ` · ${baseCredit}`}</div>
+
+                  <details className="rh-psec rh-more">
+                    <summary>Cómo moverse en el mapa</summary>
+                    <dl className="rh-howto">
+                      {(touchUi ? HOWTO_TOUCH : HOWTO_MOUSE).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}
+                    </dl>
+                  </details>
+                  <details className="rh-psec rh-more">
+                    <summary>Fuentes de los datos</summary>
+                    <p className="rh-cap">
+                      Elevación: INEGI (Continental relief 2016) y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS) · Ríos y presas: © OpenStreetMap y red de drenaje calculada del relieve · Límites: INEGI 2022 · Localidades y colonias: INEGI (Censo 2020, catálogo de localidades y DENUE)
+                      {layers.clouds && (isLive ? ` · Nubes ${pastDay ? 'del ' + fmtDate(pastDay, false) : 'de hoy'}: satélite GOES-Este (NOAA), vía NASA GIBS (ESDIS); alturas estimadas por la temperatura de la cima` : ' · Nubes: simuladas, según la lluvia media anual de INEGI')}
+                      {baseCredit && ` · ${baseCredit}`}
+                    </p>
+                  </details>
                 </div>
               )}
+            </section>
+          )}
+        </div>
+
+        <div className="rh-right">
+          {showLegend && !kiosk && (
+            <section className={'rh-legend' + (legendBody ? '' : ' rh-closed') + (baseMap === 'usodesuelo' ? ' rh-legend-wide' : '')} aria-label={'Mapa base: ' + baseInfo.title}>
+              <button type="button" className="rh-legend-head" aria-expanded={legendBody} onClick={toggleLegend} title={legendBody ? 'Ocultar la leyenda' : 'Mostrar la leyenda'}>
+                <span><b>{baseInfo.title}</b><small>{activeDef ? 'Mapa base, debajo del análisis' : `Mapa base · ${baseInfo.source}`}</small></span>
+                <IconChevron />
+              </button>
+              {legendBody && <div className="rh-legend-body"><BaseLegend baseMap={baseMap} /></div>}
+            </section>
+          )}
+          <nav className="rh-nav" aria-label="Controles del mapa">
+            {!kiosk && (
+              <>
+                <div className="rh-navg rh-navg-zoom">
+                  <button type="button" data-tip="Acercar (+)" aria-label="Acercar" onClick={() => eng()?.zoomBy(0.6)}><IconPlus /></button>
+                  <button type="button" data-tip="Alejar (−)" aria-label="Alejar" onClick={() => eng()?.zoomBy(1.6)}><IconMinus /></button>
+                </div>
+                <div className="rh-navg">
+                  <button type="button" data-tip="Norte arriba (N)" aria-label="Orientar al norte" onClick={() => eng()?.northUp()}><span className="rh-needle" ref={needleRef}><IconCompass /></span></button>
+                  <button type="button" className="rh-nav-txt" data-tip="Vista desde arriba (T)" aria-label="Vista desde arriba, en 2D" aria-pressed={is2D} onClick={view2D}>2D</button>
+                  <button type="button" className="rh-nav-txt" data-tip="Vista inclinada, en 3D" aria-label="Vista inclinada, en 3D" aria-pressed={!is2D} onClick={view3D}>3D</button>
+                  <button type="button" data-tip="Vista inicial (R)" aria-label="Volver a la vista inicial" onClick={() => eng()?.goHome()}><IconHome /></button>
+                </div>
+                {showMinimap && (
+                  <div className="rh-navg rh-navg-mini">
+                    <button type="button" data-tip={miniOpen ? 'Ocultar el minimapa' : 'Minimapa de ubicación'} aria-label="Minimapa de ubicación" aria-pressed={miniOpen} aria-controls="rh-mini" onClick={() => setMiniOpen(!miniOpen)}><IconMap /></button>
+                  </div>
+                )}
+              </>
+            )}
+            {showMinimap && !kiosk && (
+              <div className="rh-mini" id="rh-mini" hidden={!miniOpen}>
+                <canvas ref={miniRef} width={380} height={364} aria-label="Mapa de ubicación: toca para ir a un punto" />
+                <div className="rh-cap">El recuadro es lo que ves. Clic o arrastra para moverte.</div>
+              </div>
+            )}
+          </nav>
+        </div>
+
+        {!kiosk && (
+          <div className="rh-foot">
+            {ready && tips && !activeDef && (
+              <div className="rh-tips" role="note"><IconHand />{touchUi ? 'Un dedo: girar · Dos dedos: acercar y mover · Toca un municipio para ver sus datos' : 'Arrastra para girar · Rueda: acercar · Clic derecho: mover · Clic en un municipio: ver sus datos'}</div>
+            )}
+            <div className="rh-status" aria-hidden="true">
+              <span title="Municipio y altitud en el centro de la vista"><IconTarget /><span className="rh-where" ref={whereRef}>—</span><span className="rh-where-alt" ref={whereAltRef} /></span>
+              <span title="Ancho aproximado de lo que se ve"><span className="rh-status-k">Ancho de la vista</span><span ref={zoomRef}>—</span></span>
             </div>
           </div>
         )}
 
-        {showMinimap && !kiosk && (
-          <div className="rh-br">
-            <div className="rh-mini">
-              <canvas ref={miniRef} width={380} height={364} aria-label="Mapa de ubicación: toca para ir a un punto" />
-              <div className="rh-where rh-mono"><span ref={whereRef}>—</span><span ref={whereAltRef} /></div>
-            </div>
-          </div>
+        {!kiosk && (showAnalyses || showPanel) && (
+          <nav className="rh-tabbar" aria-label="Paneles">
+            {showAnalyses && (
+              <button type="button" aria-pressed={!!activeDef && !aMin && !panelOpen} disabled={!ready} onClick={tabAnalysis}>
+                {activeDef ? <AnalysisIcon id={activeDef.id} group={activeDef.grupo} /> : <IconGrid />}
+                <span>{activeDef ? activeDef.titulo : menuLabel}</span>
+              </button>
+            )}
+            {showPanel && (
+              <button type="button" aria-pressed={panelOpen} onClick={() => setPanelOpen(!panelOpen)}><IconLayers /><span>Capas y luz</span></button>
+            )}
+          </nav>
         )}
       </div>
 
@@ -597,7 +737,34 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
         <span className="rh-near" ref={tagNearRef} />
         <span className="rh-info" ref={tagInfoRef} hidden />
       </div>
-      {menuOpen && <AnalysisMenu active={analysis} onPick={openAnalysis} onClose={closeMenu} ids={mode === 'escuelas' ? SCHOOL_ANALYSES : undefined} />}
+      {menuOpen && <AnalysisMenu active={analysis} onPick={openAnalysis} onClose={closeMenu} ids={school ? SCHOOL_ANALYSES : undefined} title={school ? 'Temas para clase' : 'Análisis'} />}
     </div>
   );
+}
+
+/** Lo que dice la leyenda de cada mapa base. */
+const BASE_LEGEND: Record<BaseMapId, { title: string; source: string; hint: string }> = {
+  usodesuelo: { title: 'Uso de suelo y vegetación', source: 'INEGI, Serie VII', hint: 'Colores de lo que cubre el suelo: cultivos, bosques, matorral, ciudades y agua (INEGI).' },
+  satelite: { title: 'Imagen de satélite', source: 'Sentinel-2 · 2016', hint: 'Fotografía del satélite Sentinel-2 sin nubes: el color real del terreno.' },
+  altitud: { title: 'Altitud', source: 'metros sobre el nivel del mar', hint: 'Colores según la altura: verdes en lo bajo, ocres en el altiplano y tonos oscuros en las cumbres.' },
+};
+
+function BaseLegend({ baseMap }: { baseMap: BaseMapId }) {
+  if (baseMap === 'altitud') {
+    return (
+      <>
+        <div className="rh-bar" style={{ background: altRampCss }} />
+        <div className="rh-ticks"><span>0</span><span>1 000</span><span>2 000</span><span>3 000 m</span></div>
+      </>
+    );
+  }
+  if (baseMap === 'usodesuelo') {
+    return (
+      <>
+        <ul className="rh-key">{USV_GROUPS.map(g => <li key={g.id}><i style={{ background: g.color }} />{g.nombre}</li>)}</ul>
+        <p className="rh-key-note">Tonos más claros: vegetación secundaria (en recuperación).</p>
+      </>
+    );
+  }
+  return <p className="rh-key-note">Mosaico sin nubes de 2016 (EOX, Copernicus). Al acercarte se ve con más detalle.</p>;
 }

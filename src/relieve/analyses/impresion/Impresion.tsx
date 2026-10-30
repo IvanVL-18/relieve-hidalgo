@@ -252,7 +252,7 @@ export default function Impresion({ ctx }: AnalysisProps) {
 
   return (
     <>
-      <p className="rh-a-lead">Modelo <b>STL</b> listo para imprimir en 3D: el estado, un municipio o un rectángulo, con base plana y exageración vertical. Puede llevar ríos, límites y localidades en relieve para un <b>mapa táctil</b>.</p>
+      <p className="rh-a-lead">El modelo lleva base plana y la exageración vertical que elijas; puede llevar ríos, límites y localidades en relieve para un <b>mapa táctil</b>.</p>
 
       <Section title="Qué imprimir">
         <Seg label="Área" value={area} onChange={setArea} options={[['estado', 'Estado'], ['municipio', 'Municipio'], ['rect', 'Rectángulo']]} />

@@ -99,7 +99,7 @@ export default function Geoparque({ ctx }: AnalysisProps) {
   if (!data) return <Loading />;
   return (
     <>
-      <p className="rh-a-lead">Los <b>31 geositios</b> del {data.geoparque.nombre} ({data.geoparque.anio}) y los <b>9 Pueblos Mágicos</b> de Hidalgo. Toca un punto para ver su foto y su historia.</p>
+      <p className="rh-a-lead">Reconocido por la UNESCO en <b>{data.geoparque.anio}</b>. Toca un punto en el mapa para ver su foto y su historia.</p>
       <Section title="Qué mostrar">
         <Chips label="Tipos de sitio" value={on} options={GRUPOS.map(([g, t]) => [g, `${t} · ${count(g)}`] as [Grupo, string])} onToggle={toggle} />
         <div className="rh-a-keys" aria-hidden="true">

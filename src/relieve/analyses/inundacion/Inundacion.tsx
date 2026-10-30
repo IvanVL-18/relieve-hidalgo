@@ -10,7 +10,7 @@ import type { RoadLines } from '../accesibilidad/router';
 import type { Localidades, Servicios, UsoSuelo } from '../datasets';
 import { DEPTH_RAMP, fmtInt } from '../scales';
 import type { AnalysisProps } from '../types';
-import { Chips, ClassLegend, Facts, Loading, Note, Section, Seg, Stats, oneOf, useAsync, useLinked } from '../ui';
+import { ClassLegend, Examples, Facts, Loading, Note, Section, Seg, Stats, oneOf, useAsync, useLinked } from '../ui';
 
 type Modo = 'rio' | 'valle';
 const AGUA = USV_GROUPS.findIndex(g => g.id === 'agua');
@@ -171,7 +171,7 @@ export default function Inundacion({ ctx }: AnalysisProps) {
         <Note>{modo === 'rio'
           ? 'Haz clic sobre un río: se inunda lo que queda a pocos metros sobre ese cauce, a lo largo de ~20 km río arriba y río abajo.'
           : 'Haz clic en el fondo de un valle o una laguna: el agua sube sobre ese punto y llena todo lo que queda por debajo de su nivel.'}</Note>
-        <Chips label="Ejemplos" value="" onToggle={elegir} options={EJEMPLOS.map(([id, nombre]) => [id, nombre] as [string, string])} />
+        <Examples onPick={elegir} options={EJEMPLOS.map(([id, nombre]) => [id, nombre] as [string, string])} />
         {err && <Note>No se pudo calcular: {err}</Note>}
       </Section>
 

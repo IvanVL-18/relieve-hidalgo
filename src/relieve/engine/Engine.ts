@@ -1865,7 +1865,7 @@ export class ReliefEngine {
       this.drawMini();
       this.miniDirty = false;
       if (this.el.needle) this.el.needle.style.transform = `rotate(${((this.curSph().theta * 180) / Math.PI).toFixed(1)}deg)`;
-      if (this.el.zoomRead) this.el.zoomRead.textContent = `Vista ≈ ${fmt((dist / UNIT) * 2 * Math.tan((cam.fov * Math.PI) / 360) * Math.min(1, cam.aspect))} km`;
+      if (this.el.zoomRead) this.el.zoomRead.textContent = `≈ ${fmt((dist / UNIT) * 2 * Math.tan((cam.fov * Math.PI) / 360) * Math.min(1, cam.aspect))} km`;
     }
 
     // resolución adaptable: si al moverse no alcanza ~40 cps, baja la densidad de píxeles; en reposo la recupera

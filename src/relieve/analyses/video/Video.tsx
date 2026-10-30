@@ -161,7 +161,7 @@ export default function Video({ ctx }: AnalysisProps) {
 
   return (
     <>
-      <p className="rh-a-lead">Graba un vuelo en <b>video MP4</b> para redes sociales o presentaciones, o descarga la vista como <b>imagen 4K u 8K</b>. Se dibuja cuadro por cuadro: no se traba aunque el equipo sea lento.</p>
+      <p className="rh-a-lead">Para redes sociales o presentaciones. Se dibuja <b>cuadro por cuadro</b>: el video sale fluido aunque el equipo sea lento.</p>
 
       <Section title="Qué grabar">
         <Seg label="Tipo de vuelo" value={tipo} onChange={setTipo} options={[['vuelta', 'Vuelta'], ['acercar', 'Acercamiento'], ['ab', 'De A a B'], ['recorrido', 'Recorrido']]} />

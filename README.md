@@ -32,6 +32,11 @@ que se puede incrustar en cualquier sitio React.
   etiquetan todas las localidades del censo y, más de cerca, las colonias de las ciudades.
 - Ficha por municipio (población, superficie, altitudes), minimapa, imagen descargable con créditos y pantalla
   completa.
+- Interfaz pensada primero para monitores grandes, luego para laptops y al final para celulares: el buscador al centro
+  arriba (tecla `/`); a la izquierda, el análisis abierto ocupa toda la altura libre y «Capas y luz» queda abajo (al
+  contraerse, el análisis crece); a la derecha, la leyenda del mapa base y los controles del mapa (acercar, norte, 2D o 3D,
+  vista inicial y el minimapa, que empieza contraído); abajo, el municipio y la altitud del centro de la vista. En el
+  celular los paneles son hojas sobre una barra de pestañas («Análisis» y «Capas y luz»).
 - **Enlaces a vistas**: el botón de enlace copia una dirección que abre la misma vista (ángulo de cámara, mapa base,
   hora, exageración, nubes, municipio y el análisis abierto con lo que se eligió en él, por ejemplo el punto de una
   cuenca o el nivel de una inundación). En celular abre el menú de compartir.

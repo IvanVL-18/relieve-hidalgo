@@ -7,7 +7,7 @@ import type { Meta } from '../../shared/types';
 import { locIndex, locKey, type Localidades } from '../datasets';
 import { NOVIEW, VIEW_RAMP, fmtInt, fmtShort, hexToRgba } from '../scales';
 import type { AnalysisProps } from '../types';
-import { Bars, Chips, ClassLegend, Facts, Loading, Note, Section, Seg, Stats, oneOf, useAsync, useLinked } from '../ui';
+import { Bars, Chips, ClassLegend, Examples, Facts, Loading, Note, Section, Seg, Stats, oneOf, useAsync, useLinked } from '../ui';
 import { LosChart, type LosData } from './LosChart';
 
 type Rx = 'persona' | 'techo' | 'mastil';
@@ -298,7 +298,7 @@ export default function Antenas({ ctx }: AnalysisProps) {
           {torres.length > 0 && `${torres.length} ${torres.length === 1 ? 'torre' : 'torres'}. Clic en el mapa: otra torre${torres.length < MAX ? '' : ' (ya no caben)'}; clic sobre una torre: quitarla; clic en una localidad: su línea de vista.`}
         </Note>
         <Chips label="Opciones" value={cima ? 'cima' : ''} onToggle={() => setCima(c => !c)} options={[['cima', 'Poner la torre en la cima más cercana (≤ 400 m)']]} />
-        {EJEMPLOS.length > 0 && <Chips label="Ejemplos" value="" onToggle={elegir} options={EJEMPLOS.map(([id, nombre]) => [id, nombre] as [string, string])} />}
+        {EJEMPLOS.length > 0 && <Examples onPick={elegir} options={EJEMPLOS.map(([id, nombre]) => [id, nombre] as [string, string])} />}
         {torres.length > 0 && (
           <div className="rh-a-keys">
             <button type="button" className="rh-a-link" onClick={() => setTorres(p => p.slice(0, -1))}>Quitar la última torre</button>

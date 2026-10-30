@@ -6,7 +6,7 @@ import type { Meta } from '../../shared/types';
 import type { Localidades, Pendiente, RiosNombres } from '../datasets';
 import { fmtInt, hexToRgba } from '../scales';
 import type { AnalysisProps } from '../types';
-import { Bars, Chips, Facts, Loading, Note, Section, Stats, useAsync } from '../ui';
+import { Bars, Chips, Examples, Facts, Loading, Note, Section, Stats, useAsync } from '../ui';
 
 const FILL = '#38bdf8', EDGE = '#7dd3fc', MAIN = '#ffffff', DOWN = '#ffcf7a', WATER = '#8fd3f0';
 type Capa = 'cuenca' | 'contorno' | 'cauce' | 'abajo';
@@ -201,7 +201,7 @@ export default function Cuencas({ ctx }: AnalysisProps) {
     <>
       <Section title="Punto de salida" aside={busy ? <span className="rh-mono">calculando…</span> : undefined}>
         {!ws && <Note>Haz clic sobre un río o en cualquier punto: se ilumina el área cuya lluvia escurre hasta ahí (su cuenca), con el cauce principal y el camino que sigue el agua río abajo.</Note>}
-        <Chips label="Ejemplos" value="" onToggle={id => { const e = EJEMPLOS.find(x => x[0] === id)!; setPick({ lon: e[2], lat: e[3], fly: true }); }} options={EJEMPLOS.map(([id, nombre]) => [id, nombre] as [string, string])} />
+        <Examples onPick={id => { const e = EJEMPLOS.find(x => x[0] === id)!; setPick({ lon: e[2], lat: e[3], fly: true }); }} options={EJEMPLOS.map(([id, nombre]) => [id, nombre] as [string, string])} />
         {err && <Note>No se pudo calcular la cuenca: {err}</Note>}
       </Section>
 

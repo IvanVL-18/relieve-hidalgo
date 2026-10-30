@@ -169,7 +169,7 @@ export default function Recorridos({ ctx }: AnalysisProps) {
     <>
       {!kiosk && (
         <>
-          <p className="rh-a-lead">Vuelos narrados por el estado. Puedes mover el mapa en cualquier momento: el recorrido se detiene y sigue con <b>▶</b>.</p>
+          <p className="rh-a-lead">Puedes mover el mapa en cualquier momento: el recorrido se detiene y sigue con <b>▶</b>.</p>
           <Section title="Recorrido">
             <Seg label="Recorrido" value={tourId} onChange={pick} options={tours.map(t => [t.id, t.title.replace('Hidalgo de un vistazo', 'Hidalgo').replace('Geoparque Comarca Minera', 'Geoparque').replace('El camino del agua', 'Agua')] as [string, string])} />
             <Note>{tour.summary} {fmtDur(totalMs)}.</Note>

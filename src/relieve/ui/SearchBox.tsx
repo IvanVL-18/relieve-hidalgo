@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type KeyboardEvent } from 'react';
 import type { SearchItem } from '../engine/search';
-import { IconSearch } from './icons';
+import { IconClose, IconSearch } from './icons';
 
 interface Props {
   disabled: boolean;
@@ -43,11 +43,11 @@ export function SearchBox({ disabled, search, onChoose, version }: Props) {
     if (e.key === 'ArrowDown' && results.length) { setActive((active + 1) % results.length); e.preventDefault(); }
     else if (e.key === 'ArrowUp' && results.length) { setActive((active - 1 + results.length) % results.length); e.preventDefault(); }
     else if (e.key === 'Enter' && results[active]) { choose(results[active]); e.preventDefault(); }
-    else if (e.key === 'Escape') update('');
+    else if (e.key === 'Escape') { if (q) update(''); else e.currentTarget.blur(); e.stopPropagation(); }
   };
 
   return (
-    <div className="rh-search">
+    <div className={'rh-search' + (q ? ' rh-has-q' : '')}>
       <IconSearch />
       <input
         type="search"
@@ -66,6 +66,11 @@ export function SearchBox({ disabled, search, onChoose, version }: Props) {
         onFocus={() => q.trim() && setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 120)}
       />
+      {q ? (
+        <button type="button" className="rh-search-clear" aria-label="Borrar la búsqueda" onPointerDown={e => e.preventDefault()} onClick={() => update('')}><IconClose /></button>
+      ) : (
+        !disabled && <kbd className="rh-search-key" title="Tecla / para buscar">/</kbd>
+      )}
       {open && (
         <ul className="rh-results" id={id} role="listbox">
           {results.length === 0 && <li className="rh-empty">Sin resultados en Hidalgo</li>}

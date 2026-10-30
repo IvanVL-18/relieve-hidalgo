@@ -5,7 +5,7 @@ import { makeGeo } from '../../shared/geo';
 import type { Profile } from '../../shared/terrain';
 import { SLOPE_BREAKS, SLOPE_LABELS, SLOPE_RAMP, classOf, fmtInt, fmtMin, hexToRgba } from '../scales';
 import type { AnalysisProps } from '../types';
-import { Bars, Chips, Facts, Loading, Note, Section, Seg, Stats, oneOf, saveBlob, useLinked } from '../ui';
+import { Bars, Examples, Facts, Loading, Note, Section, Seg, Stats, oneOf, saveBlob, useLinked } from '../ui';
 import { ProfileChart, type ChartMark } from './ProfileChart';
 import { profileCsv, profileStats, slopeText, type ProfileStats } from './profile';
 import { profilePng } from './png';
@@ -202,7 +202,7 @@ export default function Perfil({ ctx }: AnalysisProps) {
           {pts.length === 1 && 'Ahora haz clic en el punto B.'}
           {pts.length >= 2 && `${pts.length} puntos. Clic en el mapa: otro punto (hasta ${MAX_PTS[modo]}); clic sobre un punto: quitarlo.`}
         </Note>
-        <Chips label="Ejemplos" value="" onToggle={pick} options={EJEMPLOS.map(([id, nombre]) => [id, nombre] as [string, string])} />
+        <Examples onPick={pick} options={EJEMPLOS.map(([id, nombre]) => [id, nombre] as [string, string])} />
         {pts.length > 0 && (
           <div className="rh-a-keys">
             <button type="button" className="rh-a-link" onClick={() => setPts(p => p.slice(0, -1))}>Quitar el último punto</button>

@@ -29,6 +29,16 @@ export function Chips<T extends string>({ value, options, onToggle, label }: { v
   );
 }
 
+/** Ejemplos listos para probar: botones de acción (no se quedan marcados), con su etiqueta visible. */
+export function Examples({ options, onPick, label = 'Prueba un ejemplo' }: { options: [string, string][]; onPick: (v: string) => void; label?: string }) {
+  return (
+    <div className="rh-a-examples" role="group" aria-label={label}>
+      <span>{label}</span>
+      {options.map(([v, t]) => <button key={v} type="button" onClick={() => onPick(v)}>{t}</button>)}
+    </div>
+  );
+}
+
 /** Leyenda de clases ordenadas: bloques contiguos con su etiqueta debajo. */
 export function ClassLegend({ colors, labels, caption }: { colors: string[]; labels: string[]; caption?: string }) {
   return (

@@ -104,7 +104,7 @@ export const ANALYSES: AnalysisDef[] = [
   },
   {
     id: 'escuelas', titulo: 'Hidalgo para escuelas', grupo: 'Difusión',
-    resumen: 'Las 10 regiones, el relieve, los climas y el camino del agua explicados con sencillez, con preguntas para clase. También con ?escuelas.',
+    resumen: 'Las 10 regiones, el relieve, los climas y el camino del agua explicados con sencillez, con preguntas para clase.',
     fuentes: ['Regiones geoculturales: Secretaría de Cultura del Estado de Hidalgo (mapa, 2019)', 'Climas, provincias fisiográficas y topoformas: INEGI 1:1 000 000 (vía IDEFOR, CONAFOR)', 'Población: INEGI, Censo 2020', 'Camino del agua: relieve de INEGI (90 m) y ríos de © OpenStreetMap'],
     load: () => import('./escuelas/Escuelas'),
   },
