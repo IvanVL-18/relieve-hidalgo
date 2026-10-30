@@ -4,7 +4,8 @@
  * INEGI), siguen al relieve (la base de los cúmulos va ~1.2 km sobre el terreno de la región) y el viento las arrastra.
  */
 
-export type CloudKind = 'auto' | 'cumulos' | 'nublado' | 'niebla' | 'tormenta';
+/** «hoy» = las nubes que ve el satélite GOES (shared/goes.ts); las demás son simuladas */
+export type CloudKind = 'auto' | 'cumulos' | 'nublado' | 'niebla' | 'tormenta' | 'hoy';
 
 export interface CloudSettings {
   kind: CloudKind;
@@ -12,14 +13,16 @@ export interface CloudSettings {
   amount: number;
   /** de dónde viene el viento, en grados desde el norte (70 = del este-noreste: los alisios del Golfo) */
   wind: number;
-  /** lapso de tiempo: las nubes avanzan, crecen y se deshacen solas */
+  /** lapso de tiempo: las nubes avanzan, crecen y se deshacen solas (con «hoy», repite el día del satélite) */
   play: boolean;
+  /** con «hoy»: otro día de los últimos ~3 meses que guarda GIBS («2026-09-11», hora de México); por omisión, hoy */
+  day?: string;
 }
 
 export const CLOUD_DEFAULTS: CloudSettings = { kind: 'auto', amount: 0.5, wind: 70, play: false };
 
-/** hint = descripción para la ayuda emergente; note = una línea para el panel */
-export const CLOUD_KINDS: { id: CloudKind; label: string; hint: string; note: string }[] = [
+/** Tipos simulados. hint = descripción para la ayuda emergente; note = una línea para el panel */
+export const CLOUD_KINDS: { id: Exclude<CloudKind, 'hoy'>; label: string; hint: string; note: string }[] = [
   { id: 'auto', label: 'Auto', hint: 'Cambian con la hora: niebla al amanecer, cúmulos de día y tormentas por la tarde', note: '' },
   { id: 'cumulos', label: 'Cúmulos', hint: 'Buen tiempo: cúmulos sueltos, más sobre la sierra y la Huasteca', note: 'Buen tiempo, más sobre la sierra' },
   { id: 'nublado', label: 'Nublado', hint: 'Capa de estratocúmulos con algunos claros', note: 'Estratocúmulos con algunos claros' },
@@ -56,7 +59,7 @@ export interface SkyParams {
 const P = (cover: number, base: number, thick: number, stratus: number, storm: number, stormTop: number, fog: number, fogTop: number, fogValley: number): SkyParams =>
   ({ cover, base, thick, stratus, storm, stormTop, fog, fogTop, fogValley });
 
-export const SKY_PRESETS: Record<Exclude<CloudKind, 'auto'>, SkyParams> = {
+export const SKY_PRESETS: Record<Exclude<CloudKind, 'auto' | 'hoy'>, SkyParams> = {
   cumulos: P(0.42, 1.25, 2.0, 0, 0, 9, 0, 1.4, 0),
   nublado: P(0.62, 0.9, 1.2, 0.85, 0, 9, 0.25, 1.3, 0.12),
   niebla: P(0.1, 1.5, 1.0, 0.4, 0, 9, 1, 1.95, 0.22),
@@ -82,9 +85,9 @@ function mix(a: SkyParams, b: SkyParams, t: number): SkyParams {
   return o;
 }
 
-/** Parámetros y descripción corta del cielo para un tipo y una hora (5–20.5). */
+/** Parámetros y descripción corta del cielo para un tipo y una hora (5–20.5); «hoy» sin satélite se ve como «auto». */
 export function skyFor(kind: CloudKind, hour: number): { params: SkyParams; text: string } {
-  if (kind !== 'auto') return { params: { ...SKY_PRESETS[kind] }, text: CLOUD_KINDS.find(k => k.id === kind)!.note };
+  if (kind !== 'auto' && kind !== 'hoy') return { params: { ...SKY_PRESETS[kind] }, text: CLOUD_KINDS.find(k => k.id === kind)!.note };
   const h = Math.min(DAY[DAY.length - 1][0], Math.max(DAY[0][0], hour));
   let i = 1;
   while (i < DAY.length - 1 && h > DAY[i][0]) i++;

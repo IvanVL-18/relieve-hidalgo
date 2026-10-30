@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { CLOUD_DEFAULTS, buildWeather, skyFor, windVector, withAmount, type CloudSettings, type SkyParams, type WeatherGrid } from '../shared/clouds';
+import { GIBS_URL, dayStartOf, type LiveCloudsStatus } from '../shared/goes';
 import type { CloudWeatherRequest, CloudWeatherResult } from '../worker/clouds.worker';
 import type { HeightUniforms } from './heights';
+import { LiveClouds, type LiveFrame } from './liveClouds';
 
 /**
  * Nubes volumétricas. Viven en el espacio de la escena en km (x, z del modelo; y = altura exagerada), así que se apoyan
@@ -109,6 +111,12 @@ uniform vec4 uC0;
 uniform vec4 uC1;
 uniform vec4 uC2;
 uniform vec3 uDrift;
+uniform sampler2D tLiveA;
+uniform sampler2D tLiveB;
+// nubes de hoy (satélite): x = encendidas, y = mezcla de A a B, zw = movimiento de A a B (uv)
+uniform vec4 uLive;
+// km → uv de las imágenes del satélite: (x − x0)·sx, (z − z0)·sz
+uniform vec4 uLiveMap;
 #define uCover uC0.x
 #define uBase uC0.y
 #define uThick uC0.z
@@ -122,15 +130,36 @@ uniform vec3 uDrift;
 #define uNoiseKm uC2.z
 #define uWeatherKm uC2.w
 float cRemap(float v, float a, float b) { return clamp((v - a) / max(b - a, 1e-4), 0.0, 1.0); }
-// lo que solo depende de (x, z)
-struct Column { float mask; float hum; float baseV; float topV; float cov; float tower; float anvil; float rain; float fogTopV; float fogAmt; };
-Column cColumn(vec2 xz) {
-  Column c;
-  vec2 g = (xz - uGridMap.xy) / uGridMap.zw;
-  // clima: r estado, g humedad, b relieve suavizado, a fondo de los valles (km / 3.5)
-  vec4 wx = texture(tWeather, (g / uWMap.x + uWMap.y + 0.5) / uWMap.zw);
-  c.mask = smoothstep(0.15, 0.75, wx.r);
-  c.hum = wx.g;
+// lo que solo depende de (x, z); thick y stormH = espesor de cúmulos y torres en la escena, strat = 0 cúmulos, 1 capa
+struct Column { float mask; float hum; float baseV; float topV; float cov; float tower; float anvil; float rain; float fogTopV; float fogAmt; float thick; float stormH; float strat; float dens; };
+// nubes de hoy: cobertura, cima (km s. n. m. / 16), densidad y convección de dos imágenes del satélite, cada una movida
+// hacia la otra. Las coordenadas se deforman ±1.5 km con el ruido (que avanza con las nubes): sin él se notan los píxeles
+// de 1 km en los bordes
+void cLive(inout Column c, vec2 xz, vec4 wx) {
+  vec2 warp = (texture(tNoise, vec3((xz - uDrift.xy) / 11.0, 0.41)).rg - 0.5) * 3.0;
+  vec2 uv = (xz + warp - uLiveMap.xy) * uLiveMap.zw;
+  vec4 o = mix(texture(tLiveA, uv - uLive.zw * uLive.y), texture(tLiveB, uv + uLive.zw * (1.0 - uLive.y)), uLive.y);
+  float gk = wx.b * 3.5, a0 = gk + mix(1.5, 0.8, c.hum), top = max(o.g * 16.0, gk + 0.3);
+  // capas delgadas (estratos, cirros, el borde de los yunques); lo convectivo y lo muy denso baja hasta la base de los cúmulos
+  float layer = mix(0.4, 1.5, o.b) + smoothstep(6.0, 9.0, top) * mix(0.6, 2.0, o.b);
+  float deep = max(smoothstep(0.3, 0.6, o.a), smoothstep(0.6, 0.95, o.b));
+  // los cúmulos chicos no llenan el píxel de 2 km y el infrarrojo les da una cima baja: al menos 0.6–1.4 km sobre su base
+  top = max(top, a0 + (0.6 + 0.8 * o.b) * smoothstep(0.3, 0.6, o.a));
+  float base = max(gk + 0.05, top - mix(layer, max(top - a0, 0.3), deep));
+  // altura real → escena: exagerada hasta la base de los cúmulos (como el relieve), sin exagerar arriba
+  c.baseV = min(base, a0) * uEx + max(base - a0, 0.0);
+  c.topV = min(top, a0) * uEx + max(top - a0, 0.0);
+  c.thick = max(c.topV - c.baseV, 0.05); c.stormH = c.thick;
+  c.strat = 1.0 - smoothstep(0.25, 0.55, o.a);
+  // en las capas que no son muy densas se asoman las celdas (estratocúmulos)
+  c.cov = o.r * mix(1.0, mix(0.86, 0.94, smoothstep(0.7, 1.0, o.b)), c.strat) * c.mask;
+  c.dens = mix(0.35, 1.0, o.b);
+  // lluvia bajo los núcleos y bajo las nubes frías muy densas
+  c.rain = max(smoothstep(0.6, 0.9, o.a), 0.6 * smoothstep(0.8, 1.0, o.b)) * smoothstep(8.0, 11.0, top) * c.mask;
+}
+// nubes simuladas: cobertura por el clima y el ruido del tiempo, tormentas y niebla
+void cSim(inout Column c, vec2 xz, vec4 wx) {
+  c.thick = uThick; c.stormH = uStormTop; c.strat = uStratus;
   c.baseV = (wx.b * 3.5 + uBase) * uEx;
   // tiempo: r variación regional, g celdas de tormenta (1 en el centro), b azar de la celda, a racimos de ~20 km
   vec2 wuv = (xz - uDrift.xy) / uWeatherKm;
@@ -139,7 +168,6 @@ Column cColumn(vec2 xz) {
   // los cúmulos dependen mucho de la humedad; una capa de estratos cubre casi parejo
   float wet = mix(mix(0.35, 1.0, c.hum), mix(0.78, 1.05, c.hum), uStratus);
   c.cov = clamp(uCover * wet + v * mix(0.45, 0.2, uStratus), 0.0, 1.0) * c.mask;
-  c.tower = 0.0; c.anvil = 0.0; c.rain = 0.0;
   if (uStorm > 0.0) {
     // celdas activas al azar, más donde es húmedo; aparecen y se apagan poco a poco
     float id = texelFetch(tWNoise, ivec2(fract(wuv) * ${WN}.0) & ${WN - 1}, 0).b;
@@ -154,13 +182,22 @@ Column cColumn(vec2 xz) {
   float edge = smoothstep(0.5, 0.85, wx.r), floorKm = wx.a * 3.5, valley = smoothstep(0.04, 0.22, (wx.b - wx.a) * 3.5);
   c.fogTopV = mix(floorKm, max(floorKm + uFogValley * valley, uFogTop * smoothstep(0.3, 0.75, c.hum)), edge) * uEx;
   c.fogAmt = uFog * edge;
+}
+Column cColumn(vec2 xz) {
+  Column c = Column(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0);
+  vec2 g = (xz - uGridMap.xy) / uGridMap.zw;
+  // clima: r estado, g humedad, b relieve suavizado, a fondo de los valles (km / 3.5)
+  vec4 wx = texture(tWeather, (g / uWMap.x + uWMap.y + 0.5) / uWMap.zw);
+  c.mask = smoothstep(0.15, 0.75, wx.r);
+  c.hum = wx.g;
+  if (uLive.x > 0.5) cLive(c, xz, wx); else cSim(c, xz, wx);
   return c;
 }
 // cúmulos, estratos y tormentas; hf = altura relativa en la nube (0 base, 1 cima)
 float cDensC(vec3 p, Column c, bool detail, out float hf) {
-  float y = p.y - c.baseV, h = y / uThick, hs = y / uStormTop;
+  float y = p.y - c.baseV, h = y / c.thick, hs = y / c.stormH;
   // los cúmulos se angostan hacia la cima; los estratos son una capa
-  float pc = smoothstep(0.0, 0.07, h) * (1.0 - smoothstep(mix(0.25, 0.7, uStratus), 1.0, h));
+  float pc = smoothstep(0.0, 0.07, h) * (1.0 - smoothstep(mix(0.25, 0.7, c.strat), 1.0, h));
   // tormenta: torre que se angosta y asoma sobre el yunque, ancho y delgado
   float tw = c.tower * smoothstep(0.0, 0.03, hs) * (1.0 - smoothstep(0.8, 1.0, hs));
   float st = max(tw, c.anvil * smoothstep(0.74, 0.82, hs) * (1.0 - smoothstep(0.86, 0.92, hs)));
@@ -171,9 +208,9 @@ float cDensC(vec3 p, Column c, bool detail, out float hf) {
   vec4 n = texture(tNoise, q);
   float shape = cRemap(n.r, n.g * 0.625 + n.b * 0.25 + n.a * 0.125 - 1.0, 1.0);
   // los estratocúmulos forman celdas (Worley) con bordes marcados
-  shape = mix(shape, shape * 0.45 + n.g * 0.55, uStratus);
+  shape = mix(shape, shape * 0.45 + n.g * 0.55, c.strat);
   // borde definido: la densidad sube en una franja angosta del ruido (cúmulos de algodón, no manchas difusas)
-  float d = cRemap(shape, 1.0 - cov, 1.0 - cov + mix(min(cov, 0.24), 0.2, uStratus));
+  float d = cRemap(shape, 1.0 - cov, 1.0 - cov + mix(min(cov, 0.24), 0.2, c.strat));
   if (detail && d > 0.0) {
     vec4 m = texture(tNoise, q * 5.3 + vec3(0.31, 0.0, 0.57));
     float e = m.g * 0.625 + m.b * 0.25 + m.a * 0.125;
@@ -181,8 +218,8 @@ float cDensC(vec3 p, Column c, bool detail, out float hf) {
     e = mix(e, 1.0 - e, clamp(hf * 2.0 - 0.6, 0.0, 1.0));
     d = cRemap(d, e * 0.34, 1.0);
   }
-  // los estratos, más delgados: dejan ver algo del relieve
-  return d * mix(1.0, 0.55, uStratus);
+  // los estratos, más delgados: dejan ver algo del relieve (y las nubes del satélite, según su densidad)
+  return d * mix(1.0, 0.55, c.strat) * c.dens;
 }
 // cortina de lluvia bajo las torres: tenue y en franjas verticales
 float cDensR(vec3 p, Column c) {
@@ -260,8 +297,10 @@ void main() {
     float gF = c.fogAmt > 0.0 ? max(0.0, p.y - c.fogTopV - 0.12 * uEx) : 1e5;
     float gap = min(gC, min(gF, gR));
     if (gap > 0.0) {
-      // ninguna capa a esta altura: salta lo que seguro no alcanza
-      t += gap > 9e4 ? max(far * 3.0, 1.0) : max(gap / slopeK, far * 0.5) + jit * far;
+      // ninguna capa a esta altura: salta lo que seguro no alcanza (las nubes del satélite pueden medir ~1 km: pasos más
+      // cortos entre ellas, sin pasarse del presupuesto de pasos)
+      float clear = uLive.x > 0.5 ? max(max(far * 1.2, 0.5), (tEnd - t) / float(STEPS - i) * 0.6) : max(far * 3.0, 1.0);
+      t += gap > 9e4 ? clear : max(gap / slopeK, far * 0.5) + jit * far;
       continue;
     }
     // en la niebla y la lluvia, el suelo detiene el rayo (los picos que entran en los cúmulos los tapa la prueba de profundidad)
@@ -409,6 +448,8 @@ export interface CloudTerrain {
   xMin: number; xMax: number; zMin: number; zMax: number;
   /** punto más alto (m) */
   maxElev: number;
+  /** georreferencia (para las nubes de hoy): primer nodo (noroeste), paso en grados, centro y km por grado */
+  lon0: number; lat0: number; step: number; lonC: number; latC: number; KX: number; KZ: number;
 }
 
 /** Uniformes del relieve para la sombra de las nubes (materials.ts). */
@@ -490,6 +531,14 @@ export class Clouds {
   private flashNext = 1;
   private flashOn = false;
   private gridMap: THREE.Vector4;
+  /** servidor de las imágenes de GOES (null = sin nubes de hoy: «hoy» se ve como «auto») */
+  liveUrl: string | null = GIBS_URL;
+  /** cambió el estado de las nubes de hoy (frame = llegó una imagen) */
+  onLive: ((s: LiveCloudsStatus, frame: boolean) => void) | null = null;
+  private live: LiveClouds | null = null;
+  private liveTex: [THREE.DataTexture, THREE.DataTexture];
+  private blank: THREE.DataTexture;
+  private liveShown: [LiveFrame | null, LiveFrame | null] = [null, null];
 
   /**
    * sh = uniformes del relieve para la sombra de las nubes; fields = campos de 270 m (brillo nocturno); haze = bruma
@@ -516,12 +565,16 @@ export class Clouds {
     this.weather.minFilter = this.weather.magFilter = THREE.LinearFilter;
     this.weather.needsUpdate = true;
     sh.tCloudSh.value = this.shadowRT.texture;
+    this.blank = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat);
+    this.blank.needsUpdate = true;
+    this.liveTex = [this.blank, this.blank];
 
     const common = {
       tNoise: { value: this.noise3.texture }, tWNoise: { value: this.wnoise.texture }, tWeather: { value: this.weather },
       uGridMap: hu.uGridMap, uWMap: { value: new THREE.Vector4(4, 12, 1, 1) }, uEx: hu.uEx,
       uC0: { value: new THREE.Vector4() }, uC1: { value: new THREE.Vector4() }, uC2: { value: new THREE.Vector4(0, 0, NOISE_KM, WEATHER_KM) },
       uDrift: { value: this.drift },
+      tLiveA: { value: this.liveTex[0] }, tLiveB: { value: this.liveTex[1] }, uLive: { value: new THREE.Vector4() }, uLiveMap: { value: new THREE.Vector4() },
       uDensity: { value: DENSITY }, uLightDir: { value: this.lightDir },
     };
     const pass = (fragmentShader: string, uniforms: Record<string, THREE.IUniform>) => new THREE.ShaderMaterial({
@@ -605,6 +658,7 @@ export class Clouds {
   setTerrain(t: CloudTerrain) {
     this.terrain = t;
     this.volMat.uniforms.uGridMax.value.set(t.W - 1, t.H - 1);
+    this.syncLive();
   }
 
   /**
@@ -645,14 +699,89 @@ export class Clouds {
     this.shadowDirty = true;
   }
 
-  /** Cambia el cielo (tipo, cantidad, viento, lapso). */
+  /** Cambia el cielo (tipo, cantidad, viento, lapso). «hoy» = las nubes del satélite. */
   set(s: Partial<CloudSettings>) {
     Object.assign(this.settings, s);
     this.updateParams();
+    this.syncLive();
   }
   setHour(h: number) {
     this.hour = h;
-    if (this.settings.kind === 'auto') this.updateParams();
+    if (this.live) this.setLiveTime(this.live.timeFor(h));
+    else if (this.settings.kind === 'auto' || this.settings.kind === 'hoy') this.updateParams();
+  }
+
+  /* ---------- nubes de hoy ---------- */
+  /** «hoy» con un servidor de imágenes */
+  get isLive() { return this.settings.kind === 'hoy' && this.liveUrl !== null; }
+  /** fecha del día que se muestra (para el Sol), con las nubes de hoy */
+  get liveYmd() { return this.live?.ymd ?? null; }
+  get liveStatus() { return this.live?.status ?? null; }
+  /** ya llegó la imagen más reciente */
+  get liveHasNewest() { return !!this.live?.hasNewest; }
+  /** Pide las imágenes del día que faltan (al mover la hora o animar), primero las cercanas a la hora que se ve. */
+  wantDay() { this.live?.want(this.live.timeFor(this.hour)); }
+
+  private liveKey = '';
+  private syncLive() {
+    const want = this.isLive && !!this.terrain, key = `${this.liveUrl}|${this.settings.day ?? ''}`;
+    if (this.live && (!want || key !== this.liveKey)) this.stopLive();
+    if (want && !this.live) { this.liveKey = key; this.startLive(); }
+  }
+
+  private startLive() {
+    const t = this.terrain!, start = this.settings.day ? dayStartOf(this.settings.day) : null;
+    // otro día del archivo (uno de hoy o futuro cuenta como hoy): primero la imagen de la hora que se ve
+    const live = (this.live = new LiveClouds(this.liveUrl!, { lon0: t.lon0, lat0: t.lat0, step: t.step, W: t.W, H: t.H, elev: t.elev, KX: t.KX, KZ: t.KZ }, frame => {
+      if (this.live !== live) return;
+      if (frame) this.setLiveTime(live.timeFor(this.hour));
+      this.onLive?.(live.status, frame);
+    }, start !== null ? { start, hour: this.hour } : undefined));
+    const b = live.box, x0 = (b.west - t.lonC) * t.KX, x1 = (b.east - t.lonC) * t.KX, z0 = (t.latC - b.north) * t.KZ, z1 = (t.latC - b.south) * t.KZ;
+    (this.volMat.uniforms.uLiveMap.value as THREE.Vector4).set(x0, z0, 1 / (x1 - x0), 1 / (z1 - z0));
+    // texturas del tamaño de las imágenes (las de 1 × 1 quedan para cuando no hay nubes de hoy)
+    this.liveTex = [0, 1].map(() => {
+      const tex = new THREE.DataTexture(new Uint8Array(b.w * b.h * 4), b.w, b.h, THREE.RGBAFormat);
+      tex.minFilter = tex.magFilter = THREE.LinearFilter;
+      tex.needsUpdate = true;
+      return tex;
+    }) as [THREE.DataTexture, THREE.DataTexture];
+    this.liveShown = [null, null];
+    this.drift.set(0, 0, 0);
+    this.onLive?.(live.status, false);
+  }
+
+  private stopLive() {
+    this.live?.dispose();
+    this.live = null;
+    for (const tex of this.liveTex) if (tex !== this.blank) tex.dispose();
+    this.liveTex = [this.blank, this.blank];
+    const u = this.volMat.uniforms;
+    u.tLiveA.value = u.tLiveB.value = this.blank;
+    (u.uLive.value as THREE.Vector4).set(0, 0, 0, 0);
+    this.liveShown = [null, null];
+    this.drift.set(0, 0, 0);
+    this.shadowDirty = true;
+  }
+
+  /** Muestra las nubes de un instante: las dos imágenes vecinas (subiendo solo la que falta), su mezcla y su movimiento. */
+  private setLiveTime(t: number) {
+    const live = this.live;
+    if (!live) return;
+    const p = live.pair(t), u = this.volMat.uniforms, lv = u.uLive.value as THREE.Vector4;
+    if (!p) { lv.x = 0; return; }
+    const held = this.liveShown, tex = this.liveTex;
+    let ia = held.indexOf(p.a), ib = p.b === p.a ? ia : held.indexOf(p.b);
+    const put = (k: number, f: LiveFrame) => { (tex[k].image.data as Uint8Array).set(f.data); tex[k].needsUpdate = true; held[k] = f; };
+    if (ia < 0 && ib < 0) { ia = 0; ib = p.b === p.a ? 0 : 1; put(0, p.a); if (ib) put(1, p.b); }
+    else if (ia < 0) { ia = 1 - ib; put(ia, p.a); }
+    else if (ib < 0) { ib = 1 - ia; put(ib, p.b); }
+    u.tLiveA.value = tex[ia];
+    u.tLiveB.value = tex[ib];
+    lv.set(1, p.mix, p.shift[0] / live.box.w, p.shift[1] / live.box.h);
+    // el detalle (ruido) avanza con las nubes y cambia despacio de forma
+    this.drift.set(p.drift[0] * live.kmPx[0], p.drift[1] * live.kmPx[1], ((t - live.dayStart) / 3600e3) * 0.6);
+    this.shadowDirty = true;
   }
   private updateParams() {
     const sky = skyFor(this.settings.kind, this.hour);
@@ -686,8 +815,8 @@ export class Clouds {
    */
   step(dt: number, rate: number, allowed = true) {
     let changed = false;
-    // con cantidad 0 no queda nada que dibujar: se apagan las pasadas
-    const some = this.params.cover + this.params.storm + this.params.fog > 0.002;
+    // con cantidad 0 (o sin imagen del satélite todavía) no queda nada que dibujar: se apagan las pasadas
+    const some = this.live ? (this.volMat.uniforms.uLive.value as THREE.Vector4).x > 0 : this.params.cover + this.params.storm + this.params.fog > 0.002;
     const want = this.on && !this.suppressed && some && !!this.grid && this.compiled && allowed;
     if (want && !this.generated) { this.generateSome(); changed = true; }
     const target = want && this.generated ? 1 : 0;
@@ -695,7 +824,8 @@ export class Clouds {
       this.fade = target > this.fade ? Math.min(target, this.fade + dt / 0.9) : Math.max(target, this.fade - dt / 0.6);
       this.shadowDirty = changed = true;
     }
-    if (rate > 0 && this.fade > 0) {
+    // (las nubes de hoy se mueven con la hora: las arrastra setLiveTime)
+    if (rate > 0 && this.fade > 0 && !this.live) {
       const [wx, wz] = windVector(this.settings.wind), k = DRIFT_KMS * dt * rate;
       this.drift.x += wx * k;
       this.drift.y += wz * k;
@@ -704,7 +834,7 @@ export class Clouds {
     }
     // relámpagos: solo con el lapso de tiempo, en celdas de tormenta activas
     const fl = this.volMat.uniforms.uFlash.value as THREE.Vector4;
-    if (rate >= 1 && this.fade > 0 && this.params.storm > 0.05) {
+    if (rate >= 1 && this.fade > 0 && (this.live ? !!this.liveShown[0]?.cores.length : this.params.storm > 0.05)) {
       this.flashT += dt;
       if (this.flashT > this.flashNext) this.strike();
       const t = this.flashT;
@@ -722,6 +852,7 @@ export class Clouds {
     this.flashNext = 0.5 + Math.random() * 2.8;
     this.flashOn = false;
     // la primera vez se leen las celdas de la GPU (cuando ya terminó de generar el ruido)
+    if (this.live) return this.strikeLive();
     if (!this.cells.length && this.generated) this.findCells();
     if (!g || !this.cells.length) return;
     const p = this.params, box = this.terrain!;
@@ -739,6 +870,25 @@ export class Clouds {
       return;
     }
     this.flashOn = false;
+  }
+
+  /** Relámpago en un núcleo de tormenta de la imagen que se ve (dentro del estado), a un tercio de la torre. */
+  private strikeLive() {
+    const g = this.grid, gm = this.gridMap, live = this.live!, f = this.liveShown[0], t = this.terrain!, fl = this.volMat.uniforms.uFlash.value as THREE.Vector4;
+    if (!g || !f || !f.cores.length) return;
+    const b = live.box, res = (b.east - b.west) / b.w;
+    for (let tries = 0; tries < 8; tries++) {
+      const k = Math.floor(Math.random() * (f.cores.length / 3)) * 3, top = f.cores[k + 2];
+      const x = (b.west + (f.cores[k] + 0.5) * res - t.lonC) * t.KX, z = (t.latC - (b.north - (f.cores[k + 1] + 0.5) * res)) * t.KZ;
+      const tx = Math.round((x - gm.x) / gm.z / g.f) + g.m, ty = Math.round((z - gm.y) / gm.w / g.f) + g.m;
+      if (tx < 0 || ty < 0 || tx >= g.w || ty >= g.h) continue;
+      const i = (ty * g.w + tx) * 4;
+      if (g.data[i] < 180) continue;
+      const a0 = (g.data[i + 2] / 255) * 3.5 + 1.1;
+      fl.set(x, a0 * this.ex + Math.max(0, top - a0) * 0.35, z, 0);
+      this.flashOn = true;
+      return;
+    }
   }
 
   /** Tamaño del lienzo en px de CSS: el volumen se calcula a la mitad (menos en pantallas muy grandes o celulares). */
@@ -763,7 +913,11 @@ export class Clouds {
     if (!t || !g || this.fade <= 0) return;
     if (!this.generated) return;
     const r = this.renderer, prev = r.getRenderTarget();
-    const p = this.params, top = Math.max(p.thick, p.storm > 0 ? p.stormTop : 0);
+    const p = this.params, live = this.live, [la, lb] = this.liveShown;
+    const lmix = (this.volMat.uniforms.uLive.value as THREE.Vector4).y;
+    // nubes de hoy: lo más alto de las dos imágenes (km sobre la base de los cúmulos) y su cobertura media
+    const top = live && la && lb ? Math.max(la.maxTop, lb.maxTop) : Math.max(p.thick, p.storm > 0 ? p.stormTop : 0);
+    const cover = live && la && lb ? la.cover + (lb.cover - la.cover) * lmix : p.cover;
     if (ex !== this.ex) { this.ex = ex; this.shadowDirty = true; }
     for (const m of [this.volMat, this.shMat]) {
       const u = m.uniforms;
@@ -775,9 +929,9 @@ export class Clouds {
     const sh = this.sh;
     if (this.shadowDirty) {
       this.shadowDirty = false;
-      const L = this.lightDir, strength = this.shadowStrength * this.fade * (p.cover + p.storm > 0.02 ? 1 : 0);
+      const L = this.lightDir, strength = this.shadowStrength * this.fade * (live || p.cover + p.storm > 0.02 ? 1 : 0);
       sh.uCloudSh1.value.z = L.y > 0.04 ? strength : 0;
-      sh.uCloudSh1.value.w = 0.25 * this.fade * Math.max(0, p.cover - 0.5) * 2 * Math.min(1, this.shadowStrength * 1.5);
+      sh.uCloudSh1.value.w = 0.25 * this.fade * Math.max(0, cover - 0.5) * 2 * Math.min(1, this.shadowStrength * 1.5);
       if (sh.uCloudSh1.value.z > 0) {
         // plano de referencia a media altura del relieve; el mapa cubre todo lo que el relieve puede consultar
         const yRef = (t.maxElev / 2000) * ex, kx = L.x / L.y, kz = L.z / L.y, off = (t.maxElev / 2000) * ex;
@@ -809,8 +963,14 @@ export class Clouds {
     const dv = dist / UNIT;
     u.uNear.value.set(Math.max(0.3, dv * 0.16), Math.max(1.5, dv * 0.3));
     u.uBox.value.set(t.xMin - 10, t.zMin - 10, t.xMax + 10, t.zMax + 10);
-    u.uY.value.set(0, (g.maxSmooth + p.base) * ex + top + 0.5, (t.maxElev / 1000) * ex);
-    u.uSlope.value = g.slope * ex * 1.3;
+    if (live && la && lb) {
+      // la base de los cúmulos llega a 1.5 km sobre el relieve suavizado; arriba de ella las alturas no se exageran
+      u.uY.value.set(0, (g.maxSmooth + 1.5) * ex + top + 0.5, (t.maxElev / 1000) * ex);
+      u.uSlope.value = Math.max(g.slope * ex * 1.3, Math.min(4, (Math.max(la.slope, lb.slope) / live.kmPx[0]) * 1.3));
+    } else {
+      u.uY.value.set(0, (g.maxSmooth + p.base) * ex + top + 0.5, (t.maxElev / 1000) * ex);
+      u.uSlope.value = g.slope * ex * 1.3;
+    }
     const k = fast ? Math.SQRT1_2 : 1, ew = Math.max(1, Math.round(this.size.x * k)), eh = Math.max(1, Math.round(this.size.y * k));
     this.rt.viewport.set(0, 0, ew, eh);
     u.uSize.value.set(ew, eh);
@@ -830,6 +990,8 @@ export class Clouds {
   dispose() {
     this.disposed = true;
     this.worker?.terminate();
+    this.live?.dispose();
+    for (const tex of new Set([...this.liveTex, this.blank])) tex.dispose();
     for (const d of [this.noise3, this.wnoise, this.shadowRT, this.rt, this.genMat, this.volMat, this.shMat, this.compMat, this.weather, this.quad.geometry, this.composite.geometry]) d.dispose();
   }
 }

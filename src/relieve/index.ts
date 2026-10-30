@@ -3,6 +3,7 @@ export type { RelieveApi, RelieveHidalgoProps } from './RelieveHidalgo';
 export type { LayerKey, Layers, MunicipioInfo, ReadyInfo } from './engine/Engine';
 export type { BaseMapId } from './shared/basemaps';
 export type { CloudKind, CloudSettings } from './shared/clouds';
+export type { LiveCloudsStatus } from './shared/goes';
 export { decodeViewState, encodeViewState, viewStateUrl } from './shared/enlaces';
 export type { View, ViewState } from './shared/enlaces';
 export { ANALYSES } from './analyses/registry';

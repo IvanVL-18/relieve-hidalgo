@@ -5,6 +5,7 @@
  *
  *   ?vista=-98.7637,20.0429,85,52,-30   lon, lat, distancia de la cámara (km), inclinación (0 = en planta) y rumbo (°)
  *   &mapa=satelite &hora=17.5 &exag=3 &nubes=niebla (o «no») &mun=13048
+ *   &nubes=hoy &dia=2026-09-11                                  nubes del satélite de otro día (sin dia, las de hoy)
  *   &analisis=inundacion &a.punto=-99.3409,20.0524 &a.h=3      parámetros del análisis, con el prefijo «a.»
  */
 import type { BaseMapId } from './basemaps';
@@ -21,6 +22,8 @@ export interface ViewState {
   exaggeration?: number;
   /** tipo de nubes, o «no» si la capa está apagada */
   clouds?: CloudKind | 'no';
+  /** con las nubes del satélite («hoy»), otro día del archivo («2026-09-11») */
+  cloudDay?: string;
   /** clave INEGI del municipio seleccionado («13048»); con un análisis abierto, cada análisis guarda el suyo */
   municipio?: string;
   analysis?: string;
@@ -29,10 +32,10 @@ export interface ViewState {
 }
 
 const BASES: BaseMapId[] = ['usodesuelo', 'satelite', 'altitud'];
-// 'hoy' = nubes reales del día (otra sesión lo agrega a CloudKind)
+// 'hoy' = nubes del satélite (de hoy, o del día de «dia»)
 const CLOUDS: readonly string[] = ['auto', 'cumulos', 'nublado', 'niebla', 'tormenta', 'hoy', 'no'];
 /** parámetros de la URL que son del visor (además de los «a.*»); los demás son del anfitrión y se conservan */
-export const VIEW_KEYS = ['vista', 'mapa', 'hora', 'exag', 'nubes', 'mun', 'analisis'];
+export const VIEW_KEYS = ['vista', 'mapa', 'hora', 'exag', 'nubes', 'dia', 'mun', 'analisis'];
 const PREFIX = 'a.';
 const KM_PER_UNIT = 100;
 
@@ -63,6 +66,7 @@ export function encodeViewState(s: ViewState): string {
   if (s.hour !== undefined) put('hora', fix(s.hour, 2));
   if (s.exaggeration !== undefined && Math.abs(s.exaggeration - 2.5) > 0.01) put('exag', fix(s.exaggeration, 1));
   if (s.clouds && s.clouds !== 'auto') put('nubes', s.clouds);
+  if (s.clouds === 'hoy' && s.cloudDay) put('dia', s.cloudDay);
   if (s.municipio) put('mun', s.municipio);
   if (s.analysis) {
     put('analisis', s.analysis);
@@ -89,6 +93,12 @@ export function decodeViewState(search: string): ViewState {
       case 'hora': if (value && n >= 0 && n <= 24) s.hour = n; break;
       case 'exag': if (value && n >= 1 && n <= 6) s.exaggeration = n; break;
       case 'nubes': if (CLOUDS.includes(value)) s.clouds = value as CloudKind | 'no'; break;
+      case 'dia': {
+        // fecha real («2026-02-30» no)
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+        if (m && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toISOString().startsWith(value)) s.cloudDay = value;
+        break;
+      }
       case 'mun': {
         // «13048», «048» o «48»
         const m = /^(?:13)?(\d{1,3})$/.exec(value), id = m ? Number(m[1]) : 0;

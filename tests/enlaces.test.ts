@@ -32,6 +32,14 @@ test('enlaces: lo inválido se ignora y los enlaces viejos siguen sirviendo', ()
   assert.equal(decodeViewState('vista=-98.7,20.1,5,120,10').view!.polar, 90);
 });
 
+test('enlaces: nubes del satélite de otro día', () => {
+  assert.equal(encodeViewState({ clouds: 'hoy', cloudDay: '2026-09-11' }), 'nubes=hoy&dia=2026-09-11');
+  // el día solo va con las nubes del satélite
+  assert.equal(encodeViewState({ clouds: 'niebla', cloudDay: '2026-09-11' }), 'nubes=niebla');
+  assert.deepEqual(decodeViewState('?nubes=hoy&dia=2026-09-11'), { clouds: 'hoy', cloudDay: '2026-09-11' });
+  for (const bad of ['2026-02-30', '2026-13-01', '0000-01-01', '11/09/2026', 'ayer']) assert.deepEqual(decodeViewState('?nubes=hoy&dia=' + bad), { clouds: 'hoy' }, bad);
+});
+
 test('enlaces: la dirección conserva los parámetros del anfitrión', () => {
   const s: ViewState = { baseMap: 'altitud', analysis: 'cuencas', params: { punto: '-98.7654,21.2387' } };
   const url = viewStateUrl('https://lab.hidalgo.gob.mx/mapas/relieve?tab=2&mapa=satelite&a.viejo=1&quieto#ficha', s);

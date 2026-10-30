@@ -21,6 +21,11 @@ que se puede incrustar en cualquier sitio React.
   amanecer, cúmulos de día, tormentas con relámpagos por la tarde), cúmulos, nublado, niebla o tormenta, con cantidad,
   dirección del viento y lapso de tiempo. Se forman más donde llueve más (lluvia media anual de INEGI), su base sigue al
   relieve y de noche las ciudades iluminan su base. Se ocultan mientras hay un análisis abierto.
+- **Nubes de hoy**: las que ve el satélite GOES-Este de la NOAA (imágenes de NASA GIBS, gratuitas, con ~40 min de
+  retraso), en 3D sobre el relieve: la altura de cada nube sale de la temperatura de su cima y de día el visible marca
+  su forma y su espesor; de noche se ven también las nubes bajas. La hora del Sol elige la imagen del día y
+  «Repetir el día» anima desde las 5:00 con el Sol de cada hora; el panel dice la hora de la imagen y hacia dónde
+  avanzan las nubes. También cualquier día de los últimos 90 (lo que guarda NASA), con el Sol de ese día.
 - Buscador con los 84 municipios, las 5 297 localidades de INEGI (las 4 690 del censo y las deshabitadas o de una o
   dos viviendas del catálogo de localidades), ~2 800 colonias, fraccionamientos y barrios, ríos y presas. De cerca se
   etiquetan todas las localidades del censo y, más de cerca, las colonias de las ciudades.
@@ -65,7 +70,7 @@ La dirección de la página sigue a la vista, así que se puede copiar de la bar
 Parámetros: `?vista=lon,lat,km,inclinación,rumbo` (cámara; km = distancia al punto que mira), `?analisis=accesibilidad`
 (o `poblacion`, `localidades`, `marginacion`, `cuencas`, `inundacion`, `laderas`, `cambio-uso`, `perfil`) con sus
 parámetros `a.*` (por ejemplo `&a.punto=-98.7654,21.2387` en cuencas), `?mapa=satelite` o `?mapa=altitud`, `?hora=19.5`,
-`?exag=3`, `?mun=13048`, `?nubes=tormenta` (o `auto`, `cumulos`, `nublado`, `niebla`, `no`), `?lapso` (nubes en
+`?exag=3`, `?mun=13048`, `?nubes=tormenta` (o `auto`, `cumulos`, `nublado`, `niebla`, `hoy` para las del satélite —con `&dia=2026-09-11`, las de otro día—, `no`), `?lapso` (nubes en
 movimiento), `?quieto` (sin giro) y `?embed` (el mapa dentro de una página normal).
 
 Los datos procesados ya vienen en `src/relieve/data/`, así que no hace falta descargar nada para correrlo.
@@ -90,7 +95,10 @@ import { RelieveHidalgo } from './relieve';
 ```
 
 El cielo inicial se elige con `initialClouds={{ kind: 'niebla', amount: 0.7, wind: 0, play: true }}` y se apaga con
-`initialLayers={{ clouds: false }}`.
+`initialLayers={{ clouds: false }}`. Con `kind: 'hoy'` abre con las nubes del satélite (`day: '2026-09-11'` muestra
+otro día de los últimos 90; en el panel, el selector de día). Las imágenes las pide el navegador de cada visitante a
+NASA solo cuando elige «Del satélite»; `liveCloudsUrl="/api/gibs"` las pide a un proxy propio (con las mismas rutas `/wms/…` y `/wmts/…` de GIBS) y
+`liveCloudsUrl={null}` quita la opción.
 
 Para los enlaces a vistas, el componente no toca el historial del navegador: el anfitrión decide. Con la URL de la
 página:
@@ -171,6 +179,7 @@ no la necesita: lee archivos estáticos comprimidos. La base es para consultas, 
 | Elevación | INEGI, Continental relief 2016, y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS Open Data) | Términos de libre uso del INEGI; USGS: dominio público |
 | Límites municipales | INEGI, Marco Geoestadístico 2022 | Términos de libre uso del INEGI |
 | Uso del suelo y vegetación | INEGI, Series VII y VI 1:250 000 (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
+| Nubes de hoy | NOAA, satélite GOES-Este (bandas 2 y 13, GeoColor de CIRA), vía NASA GIBS (ESDIS) | Datos de la NOAA y la NASA sin restricciones de uso (citar GIBS) |
 | Lluvia media anual (nubes; en laderas solo para comparar) | INEGI, precipitación media anual 1910–2009 (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
 | Lluvia intensa (laderas) | Climate Hazards Center (UCSB), CHIRPS v3.0, lluvia por pentadas a 0.05° | Dominio público (citar doi:10.15780/G2JQ0P) |
 | Tipo de roca (laderas) | INEGI, geología 1:250 000 serie I (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
@@ -217,8 +226,11 @@ Estas atribuciones aparecen en el mapa y en la imagen descargable, y deben conse
 - El **perfil** usa el relieve de 30 m: en puentes, túneles y cortes no ve la obra (el perfil baja a la barranca o sube
   a la loma), y por carretera la pendiente de 100 m en 100 m puede salir mayor que la de la vía, que va cortada en la
   ladera. La subida acumulada ignora vaivenes de menos de 3 m para no contar el ruido del relieve.
-- Las **nubes** son una simulación para ver el relieve con distintos cielos, no un pronóstico ni una imagen de satélite:
-  se reparten según la lluvia media anual y la hora, no según el tiempo de hoy.
+- Las **nubes** simuladas sirven para ver el relieve con distintos cielos, no son un pronóstico: se reparten según la
+  lluvia media anual y la hora, no según el tiempo de hoy.
+- Las **nubes de hoy** están donde el satélite las ve, pero su forma en 3D es una reconstrucción: la altura de la cima
+  sale de su temperatura (con un error de ~1 km; los cirros delgados salen más bajos), la base se supone y el detalle
+  fino es ruido. Las imágenes llegan con ~40 minutos de retraso.
 
 ![Hidalgo de noche](docs/noche.webp)
 
@@ -229,7 +241,7 @@ src/relieve/           componente integrable
   engine/              motor 3D (three.js): relieve con niveles de detalle, teselas, capas raster, rutas, mapas base
   analyses/            análisis y su registro
   shared/              lógica compartida por el navegador y los scripts de datos (rutas, cuencas, pendientes)
-  worker/              arranque del relieve, worker de relieve (relieve fino, teselas y consultas de los análisis) y clima de las nubes
+  worker/              arranque del relieve, worker de relieve (relieve fino, teselas y consultas de los análisis), clima de las nubes e imágenes de GOES
   data/                datos procesados que carga el mapa
 scripts/pipeline/      descarga y procesamiento de fuentes (relieve, hidrología, población…), carga a PostgreSQL
 scripts/               capturas (npm run shot), regresión visual (npm run visual) y rendimiento (npm run perf)

@@ -10,7 +10,8 @@ import { useCallback, useEffect, useImperativeHandle, useRef, useState, type CSS
 import type { Datasets } from './analyses/datasets';
 import { ANALYSES } from './analyses/registry';
 import type { LayerKey, Layers, LoadStage, MunicipioInfo, ReadyInfo, ReliefEngine } from './engine/Engine';
-import { CLOUD_DEFAULTS, CLOUD_KINDS, skyFor, windName, type CloudSettings } from './shared/clouds';
+import { CLOUD_DEFAULTS, CLOUD_KINDS, skyFor, windName, type CloudKind, type CloudSettings } from './shared/clouds';
+import { archiveRange, dayIso, dayStartOf, mxHour, type LiveCloudsStatus } from './shared/goes';
 import { viewStateUrl, type ViewState } from './shared/enlaces';
 import type { SearchItem } from './engine/search';
 import { BASE_MAPS, type BaseMapId } from './shared/basemaps';
@@ -46,6 +47,12 @@ export interface RelieveHidalgoProps {
   initialLayers?: Partial<Layers>;
   /** cielo inicial: tipo de nubes (auto = según la hora), cantidad 0–1, viento (grados desde el norte) y lapso de tiempo */
   initialClouds?: Partial<CloudSettings>;
+  /**
+   * nubes del satélite («Del satélite» en el panel, kind: 'hoy'): servidor de las imágenes de GOES. Por omisión NASA GIBS,
+   * que el navegador de cada visitante consulta solo al elegir esa opción; puede ser un proxy del anfitrión con las mismas
+   * rutas (/wms/epsg4326/best/wms.cgi y /wmts/epsg4326/best/1.0.0/…). null quita la opción
+   */
+  liveCloudsUrl?: string | null;
   /** mapa base: uso de suelo INEGI (por omisión), satélite o tintas por altitud */
   initialBaseMap?: BaseMapId;
   /** análisis abierto al cargar (id del registro, p. ej. «accesibilidad») */
@@ -90,6 +97,15 @@ const STAGE_TEXT: Record<LoadStage, string> = {
   download: 'Descargando el relieve…', build: 'Levantando el relieve…', gpu: 'Preparando la vista…',
 };
 const fmtHour = (h: number) => { const m = Math.round(h * 60); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`; };
+/** «11 sep» (fecha en México) */
+const fmtDay = (ms: number) => new Date(ms - 6 * 3600e3).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+/** «vie 11 sep 2026» (o sin el día de la semana) de «2026-09-11» */
+const fmtDate = (day: string, weekday = true) => {
+  const d = new Date(day + 'T12:00:00Z'), f = (o: Intl.DateTimeFormatOptions) => d.toLocaleDateString('es-MX', { ...o, timeZone: 'UTC' }).replace(/\./g, '');
+  return (weekday ? f({ weekday: 'short' }) + ' ' : '') + f({ day: 'numeric', month: 'short', year: 'numeric' });
+};
+/** «12 min» o «1 h 5 min» desde un instante */
+const fmtAgo = (ms: number) => { const m = Math.max(0, Math.round((Date.now() - ms) / 60e3)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
 const fmtN = (n: number) => Math.round(n).toLocaleString('es-MX').replace(/,/g, ' ');
 /** Corre fn cuando el navegador está libre (o a los 1.5 s donde no hay requestIdleCallback, como Safari). */
 const whenIdle = (fn: () => void) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 4000 }) : setTimeout(fn, 1500));
@@ -122,7 +138,9 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   const [error, setError] = useState('');
   const [info, setInfo] = useState<ReadyInfo | null>(null);
   const [layers, setLayers] = useState<Layers>(() => ({ ...DEFAULT_LAYERS, ...props.initialLayers, ...(iv.clouds ? { clouds: iv.clouds !== 'no' } : {}) }));
-  const [clouds, setClouds] = useState<CloudSettings>(() => ({ ...CLOUD_DEFAULTS, ...props.initialClouds, ...(iv.clouds && iv.clouds !== 'no' ? { kind: iv.clouds } : {}) }));
+  const [clouds, setClouds] = useState<CloudSettings>(() => ({
+    ...CLOUD_DEFAULTS, ...props.initialClouds, ...(iv.clouds && iv.clouds !== 'no' ? { kind: iv.clouds } : {}), ...(iv.cloudDay ? { day: iv.cloudDay } : {}),
+  }));
   const [exag, setExag] = useState(iv.exaggeration ?? props.initialExaggeration ?? 2.5);
   const [hour, setHour] = useState(Math.min(20.5, Math.max(5, iv.hour ?? props.initialHour ?? 16.5)));
   const [baseMap, setBaseMap] = useState<BaseMapId>(iv.baseMap ?? props.initialBaseMap ?? 'usodesuelo');
@@ -162,6 +180,9 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
             dataBaseUrl: props.dataBaseUrl,
             quality: props.quality,
             exaggeration: exag, hour, layers, baseMap, clouds,
+            liveCloudsUrl: props.liveCloudsUrl,
+            onLiveClouds: s => setLive(s),
+            onHourChange: h => setHour(h),
             // un enlace con vista abre quieto en ella
             autoRotate: (props.autoRotate ?? true) && !iv.view,
             cooperativeGestures: props.cooperativeGestures ?? false,
@@ -236,6 +257,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
     if (!e || !L.ready) return null;
     return {
       view: e.getView(), baseMap: L.baseMap, hour: L.hour, exaggeration: L.exag, clouds: L.layers.clouds ? L.clouds.kind : 'no',
+      cloudDay: L.layers.clouds && L.clouds.kind === 'hoy' ? L.clouds.day : undefined,
       // con un análisis abierto, el municipio lo guarda el análisis (en sus parámetros)
       municipio: L.analysis ? undefined : L.selected?.code, analysis: L.analysis ?? undefined, params: L.analysis ? L.params : undefined,
     };
@@ -245,7 +267,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
     clearTimeout(emitTimer.current);
     emitTimer.current = window.setTimeout(() => { const s = viewState(); if (s) propsRef.current.onViewChange?.(s); }, 250);
   }
-  useEffect(() => { if (ready) emitView(); }, [ready, baseMap, hour, exag, layers.clouds, clouds.kind, selected, analysis, params]);
+  useEffect(() => { if (ready) emitView(); }, [ready, baseMap, hour, exag, layers.clouds, clouds.kind, clouds.day, selected, analysis, params]);
   useEffect(() => () => clearTimeout(emitTimer.current), []);
   function flash(text: string, ms: number) {
     setHint(text);
@@ -264,6 +286,28 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   };
   const toggleLayer = (k: LayerKey) => { const on = !layers[k]; setLayers({ ...layers, [k]: on }); eng()?.setLayer(k, on); };
   const updateClouds = (s: Partial<CloudSettings>) => { setClouds(c => ({ ...c, ...s })); eng()?.setClouds(s); };
+  // nubes de hoy: el último tipo simulado elegido (para volver a él) y el estado de la imagen
+  const [live, setLive] = useState<LiveCloudsStatus | null>(null);
+  const lastSim = useRef<Exclude<CloudKind, 'hoy'>>(clouds.kind === 'hoy' ? 'auto' : clouds.kind);
+  if (clouds.kind !== 'hoy') lastSim.current = clouds.kind;
+  const liveAllowed = props.liveCloudsUrl !== null;
+  const isLive = clouds.kind === 'hoy' && liveAllowed;
+  const setSource = (today: boolean) => {
+    if (today === isLive) return;
+    if (today) setLive(null);
+    updateClouds({ kind: today ? 'hoy' : lastSim.current, play: false });
+  };
+  const retryLive = () => { setLive(null); eng()?.setClouds({ kind: lastSim.current }); eng()?.setClouds({ kind: 'hoy' }); };
+  // otro día del archivo de GIBS (los últimos 90, contando hoy); sin día, las de hoy
+  const [dayMin, dayMax] = archiveRange(Date.now());
+  const pastDay = clouds.day && clouds.day < dayMax ? clouds.day : undefined;
+  const chooseDay = (d?: string) => {
+    const v = d && dayStartOf(d) !== null && d < dayMax ? (d < dayMin ? dayMin : d) : undefined;
+    if (v === pastDay) return;
+    setLive(null);
+    updateClouds({ day: v });
+  };
+  const stepDay = (n: number) => chooseDay(dayIso((dayStartOf(pastDay ?? dayMax) ?? 0) + n * 864e5));
   const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const download = async () => {
     const blob = await eng()?.screenshot();
@@ -278,7 +322,9 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
     else rootRef.current?.requestFullscreen().catch(() => undefined);
   };
-  const isNight = info ? hour < info.sunrise - 0.1 || hour > info.sunset + 0.1 : false;
+  // amanecer y anochecer de hoy o, con las nubes del satélite de otro día, los de ese día (el Sol es el de ese día)
+  const sun = pastDay && isLive && live?.sunrise !== undefined && live.sunset !== undefined ? { sunrise: live.sunrise, sunset: live.sunset } : info;
+  const isNight = sun ? hour < sun.sunrise - 0.1 || hour > sun.sunset + 0.1 : false;
   const chooseBase = (id: BaseMapId) => {
     setBaseMap(id);
     const p = eng()?.setBaseMap(id);
@@ -401,31 +447,72 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                   </div>
                   {layers.clouds && (
                     <div className="rh-sky" role="group" aria-label="Nubes">
-                      <div className="rh-seg rh-seg5" role="radiogroup" aria-label="Tipo de cielo">
-                        {CLOUD_KINDS.map(k => (
-                          <button key={k.id} type="button" role="radio" aria-checked={clouds.kind === k.id} title={k.hint} onClick={() => updateClouds({ kind: k.id })}>{k.label}</button>
-                        ))}
-                      </div>
-                      <div className="rh-sky-row">
-                        <div className="rh-ctl">
-                          <div className="rh-head"><label htmlFor="rh-cloud-amt">Cantidad</label><output htmlFor="rh-cloud-amt">{Math.round(clouds.amount * 100)} %</output></div>
-                          <input id="rh-cloud-amt" type="range" min={0} max={1} step={0.01} value={clouds.amount} onChange={e => updateClouds({ amount: +e.target.value })} />
+                      {liveAllowed && (
+                        <div className="rh-seg rh-seg2" role="radiogroup" aria-label="Origen de las nubes">
+                          <button type="button" role="radio" aria-checked={!isLive} title="Nubes ilustrativas: eliges el tipo de cielo, la cantidad y el viento" onClick={() => setSource(false)}>Simuladas</button>
+                          <button type="button" role="radio" aria-checked={isLive} title="Las nubes que vio el satélite GOES-Este de la NOAA (imágenes de NASA): hoy, con ~40 min de retraso, o un día de los últimos 90" onClick={() => setSource(true)}>Del satélite</button>
                         </div>
-                        <div className="rh-ctl">
-                          <div className="rh-head">
-                            <label htmlFor="rh-wind">Viento</label>
-                            <output htmlFor="rh-wind"><span className="rh-wind-arrow" style={{ transform: `rotate(${clouds.wind + 180}deg)` }}><IconArrow /></span>{windName(clouds.wind)}</output>
+                      )}
+                      {isLive ? (
+                        <>
+                          <div className="rh-live-day" role="group" aria-label="Día de las imágenes del satélite">
+                            <button type="button" className="rh-day-step rh-day-prev" aria-label="Día anterior" title="Día anterior" disabled={(pastDay ?? dayMax) <= dayMin} onClick={() => stepDay(-1)}><IconChevron /></button>
+                            <input type="date" required aria-label="Día" title={`Cualquier día del ${fmtDate(dayMin, false)} a hoy`} min={dayMin} max={dayMax} value={pastDay ?? dayMax} onChange={e => chooseDay(e.target.value)} />
+                            <button type="button" className="rh-day-step rh-day-next" aria-label="Día siguiente" title="Día siguiente" disabled={!pastDay} onClick={() => stepDay(1)}><IconChevron /></button>
+                            <button type="button" className="rh-day-today" hidden={!pastDay} title="Volver a las nubes de hoy" onClick={() => chooseDay()}>Hoy</button>
                           </div>
-                          <input id="rh-wind" type="range" min={0} max={360} step={5} value={clouds.wind} aria-valuetext={'Viento ' + windName(clouds.wind)} onChange={e => updateClouds({ wind: +e.target.value })} />
-                        </div>
-                        <button type="button" className="rh-sky-play" aria-pressed={clouds.play} disabled={reduceMotion}
-                          aria-label={clouds.play ? 'Detener las nubes' : 'Animar las nubes'}
-                          title={reduceMotion ? 'Sin animación: el sistema pide reducir el movimiento' : clouds.play ? 'Detener las nubes' : 'Lapso de tiempo: las nubes avanzan con el viento, crecen y se deshacen'}
-                          onClick={() => updateClouds({ play: !clouds.play })}>
-                          {clouds.play ? <IconPause /> : <IconPlay />}
-                        </button>
-                      </div>
-                      <div className="rh-mono rh-sky-note">{activeDef ? 'Ocultas mientras hay un análisis abierto' : skyFor(clouds.kind, hour).text}</div>
+                          <div className="rh-live" aria-live="polite">
+                            <span className={'rh-live-dot rh-live-' + (live?.state ?? 'loading')} aria-hidden="true" />
+                            <div className="rh-live-text">
+                              {!live || (live.state === 'loading' && !live.loaded) ? <b>Descargando la imagen del satélite…</b>
+                                : live.state === 'error' ? <><b>No se pudo descargar la imagen</b><span className="rh-mono">{live.message ?? 'Revisa tu conexión'} · <button type="button" className="rh-link" onClick={retryLive}>Reintentar</button></span></>
+                                : <>
+                                  <b>{live.shown !== undefined ? `Imagen de las ${fmtHour(mxHour(live.shown))}` : 'Imagen del satélite'}</b>
+                                  <span className="rh-mono">
+                                    {pastDay ? fmtDate(pastDay)
+                                      : live.latest !== undefined && (Date.now() - live.latest < 864e5 ? `Última: ${fmtHour(mxHour(live.latest))}, hace ${fmtAgo(live.latest)}` : `${fmtDay(live.latest)}, última de las ${fmtHour(mxHour(live.latest))}`)}
+                                    {live.total > 1 && live.loaded < live.total && ` · ${live.loaded}/${live.total} imágenes`}
+                                    {live.windKmh !== undefined && live.windDeg !== undefined && live.windKmh >= 3 && <> · <span className="rh-wind-arrow" style={{ transform: `rotate(${live.windDeg + 180}deg)` }}><IconArrow /></span>{windName(live.windDeg)}, {Math.round(live.windKmh)} km/h</>}
+                                  </span>
+                                </>}
+                            </div>
+                            <button type="button" className="rh-sky-play" aria-pressed={clouds.play} disabled={reduceMotion || live?.state !== 'ready'}
+                              aria-label={clouds.play ? 'Detener' : 'Repetir el día'}
+                              title={reduceMotion ? 'Sin animación: el sistema pide reducir el movimiento' : clouds.play ? 'Detener' : 'Repetir el día: las imágenes del satélite desde las 5:00, con el Sol de cada hora'}
+                              onClick={() => updateClouds({ play: !clouds.play })}>
+                              {clouds.play ? <IconPause /> : <IconPlay />}
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="rh-seg rh-seg5" role="radiogroup" aria-label="Tipo de cielo">
+                            {CLOUD_KINDS.map(k => (
+                              <button key={k.id} type="button" role="radio" aria-checked={clouds.kind === k.id} title={k.hint} onClick={() => updateClouds({ kind: k.id })}>{k.label}</button>
+                            ))}
+                          </div>
+                          <div className="rh-sky-row">
+                            <div className="rh-ctl">
+                              <div className="rh-head"><label htmlFor="rh-cloud-amt">Cantidad</label><output htmlFor="rh-cloud-amt">{Math.round(clouds.amount * 100)} %</output></div>
+                              <input id="rh-cloud-amt" type="range" min={0} max={1} step={0.01} value={clouds.amount} onChange={e => updateClouds({ amount: +e.target.value })} />
+                            </div>
+                            <div className="rh-ctl">
+                              <div className="rh-head">
+                                <label htmlFor="rh-wind">Viento</label>
+                                <output htmlFor="rh-wind"><span className="rh-wind-arrow" style={{ transform: `rotate(${clouds.wind + 180}deg)` }}><IconArrow /></span>{windName(clouds.wind)}</output>
+                              </div>
+                              <input id="rh-wind" type="range" min={0} max={360} step={5} value={clouds.wind} aria-valuetext={'Viento ' + windName(clouds.wind)} onChange={e => updateClouds({ wind: +e.target.value })} />
+                            </div>
+                            <button type="button" className="rh-sky-play" aria-pressed={clouds.play} disabled={reduceMotion}
+                              aria-label={clouds.play ? 'Detener las nubes' : 'Animar las nubes'}
+                              title={reduceMotion ? 'Sin animación: el sistema pide reducir el movimiento' : clouds.play ? 'Detener las nubes' : 'Lapso de tiempo: las nubes avanzan con el viento, crecen y se deshacen'}
+                              onClick={() => updateClouds({ play: !clouds.play })}>
+                              {clouds.play ? <IconPause /> : <IconPlay />}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                      <div className="rh-mono rh-sky-note">{activeDef ? 'Ocultas mientras hay un análisis abierto' : isLive ? 'La hora del sol elige la imagen' : skyFor(clouds.kind, hour).text}</div>
                     </div>
                   )}
                   <div className="rh-ctl">
@@ -439,13 +526,20 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                       <output htmlFor="rh-hour">{isNight ? <IconMoon /> : <IconSun />}{fmtHour(hour)}</output>
                     </div>
                     <input id="rh-hour" type="range" min={5} max={20.5} step={0.05} value={hour}
-                      style={info ? ({ '--rh-rise': `${((info.sunrise - 5) / 15.5) * 100}%`, '--rh-set': `${((info.sunset - 5) / 15.5) * 100}%` } as CSSProperties) : undefined}
+                      style={sun ? ({ '--rh-rise': `${((sun.sunrise - 5) / 15.5) * 100}%`, '--rh-set': `${((sun.sunset - 5) / 15.5) * 100}%` } as CSSProperties) : undefined}
                       className="rh-hour"
                       onChange={e => { const v = +e.target.value; setHour(v); eng()?.setHour(v); }} />
-                    {info && <div className="rh-mono rh-sunline">Hoy amanece a las {fmtHour(info.sunrise)} y anochece a las {fmtHour(info.sunset)}</div>}
+                    {isLive && layers.clouds && live?.firstHour !== undefined && live.lastHour !== undefined && (
+                      <div className="rh-live-track" title="Horas del día con imagen del satélite" aria-hidden="true">
+                        <i style={{ left: `${((Math.max(5, live.firstHour) - 5) / 15.5) * 100}%`, width: `${((Math.min(20.5, live.lastHour) - Math.max(5, live.firstHour)) / 15.5) * 100}%` }} />
+                      </div>
+                    )}
+                    {sun && <div className="rh-mono rh-sunline">{pastDay && sun !== info
+                      ? `El ${fmtDate(pastDay, false)} amaneció a las ${fmtHour(sun.sunrise)} y anocheció a las ${fmtHour(sun.sunset)}`
+                      : `Hoy amanece a las ${fmtHour(sun.sunrise)} y anochece a las ${fmtHour(sun.sunset)}`}</div>}
                   </div>
                   <div className="rh-mono rh-keys">Arrastrar: girar · Clic derecho o Shift: mover · Rueda: acercar donde apuntas · Clic: municipio · Doble clic: ir ahí</div>
-                  <div className="rh-mono rh-credits">Elevación: INEGI (Continental relief 2016) y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS) · Ríos y presas: © OpenStreetMap y red de drenaje calculada del relieve · Límites: INEGI 2022 · Localidades y colonias: INEGI (Censo 2020, catálogo de localidades y DENUE){layers.clouds && ' · Nubes: simuladas, según la lluvia media anual de INEGI'}{baseCredit && ` · ${baseCredit}`}</div>
+                  <div className="rh-mono rh-credits">Elevación: INEGI (Continental relief 2016) y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS) · Ríos y presas: © OpenStreetMap y red de drenaje calculada del relieve · Límites: INEGI 2022 · Localidades y colonias: INEGI (Censo 2020, catálogo de localidades y DENUE){layers.clouds && (isLive ? ` · Nubes ${pastDay ? 'del ' + fmtDate(pastDay, false) : 'de hoy'}: satélite GOES-Este (NOAA), vía NASA GIBS (ESDIS); alturas estimadas por la temperatura de la cima` : ' · Nubes: simuladas, según la lluvia media anual de INEGI')}{baseCredit && ` · ${baseCredit}`}</div>
                 </div>
               )}
             </div>

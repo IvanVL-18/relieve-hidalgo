@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import metaJson from '../data/meta.json';
 import { BASE_KM, makeGeo, type Geo } from '../shared/geo';
 import type { CloudSettings } from '../shared/clouds';
+import type { LiveCloudsStatus } from '../shared/goes';
 import type { View } from '../shared/enlaces';
 import type { TerrainApi } from '../shared/terrain';
 import type { BuildRequest, BuildResult, DetailResult, LinesResult, Meta, TilePackInfo, WorkerMessage } from '../shared/types';
@@ -101,6 +102,15 @@ export interface EngineOptions {
   onGestureHint?(): void;
   /** la cámara se detuvo tras moverse (para enlaces a vistas; mientras el mapa gira solo no se avisa) */
   onViewChange?(): void;
+  /**
+   * servidor de las imágenes del satélite para las nubes de hoy (por omisión NASA GIBS; puede ser un proxy con las mismas
+   * rutas /wms y /wmts). null = sin nubes de hoy
+   */
+  liveCloudsUrl?: string | null;
+  /** estado de las nubes de hoy (cargando, hora de la imagen, viento…) */
+  onLiveClouds?(s: LiveCloudsStatus): void;
+  /** el motor movió la hora del Sol (nubes de hoy: al llegar la imagen y al repetir el día) */
+  onHourChange?(h: number): void;
   /** revisa errores de shaders (lento: espera a la GPU). Solo en desarrollo */
   debug?: boolean;
 }
@@ -232,6 +242,9 @@ export class ReliefEngine {
   private lastMove = 0;
   /** último cuadro con la cámara, las nubes o una animación en movimiento */
   private lastActive = 0;
+  /** nubes de hoy: la hora ya se puso en la de la imagen; última vez que se avisó la hora al animar */
+  private liveHourSet = false;
+  private hourEmit = 0;
   private viewMoved = false;
   private ambientUntil = 0;
   private fullDpr: number;
@@ -415,7 +428,8 @@ export class ReliefEngine {
     // las líneas y el relieve fino pueden haber llegado ya y anotado sus tiempos
     this.timings = Object.assign(res.timings, this.timings);
     this.ready = true;
-    const { sunrise, sunset } = sunTimes(this.ymd, this.geo.latC, this.geo.lonC);
+    // los de hoy (con las nubes del satélite de otro día, this.ymd ya puede ser ese día)
+    const { sunrise, sunset } = sunTimes(todayInMexico(), this.geo.latC, this.geo.lonC);
     this.t0 = this.last = performance.now();
     this.wake();
     this.opts.onReady?.({ minElev: meta.relief.min, maxElev: meta.relief.max, sunrise, sunset, timings: this.timings });
@@ -474,6 +488,8 @@ export class ReliefEngine {
 
     // nubes: sus pasadas se compilan junto con la escena
     const clouds = (this.clouds = new Clouds(this.renderer, this.hu, tu, tu.tFields, this.shared, this.small));
+    if (this.opts.liveCloudsUrl !== undefined) clouds.liveUrl = this.opts.liveCloudsUrl;
+    clouds.onLive = s => this.onLive(s);
     clouds.set({ ...this.opts.clouds });
     clouds.setOn(this.layers.clouds);
     clouds.setSize(this.el.stage.clientWidth || 1, this.el.stage.clientHeight || 1);
@@ -534,6 +550,7 @@ export class ReliefEngine {
     this.clouds?.setTerrain({
       elev: res.elev, muni: res.muni, W, H, cellKm: (meta.step * (g.KX + g.KZ)) / 2,
       xMin: g.xMin, xMax: g.xMax, zMin: g.zMin, zMax: g.zMax, maxElev: meta.relief.max,
+      lon0: meta.lon0, lat0: meta.lat0, step: meta.step, lonC: g.lonC, latC: g.latC, KX: g.KX, KZ: g.KZ,
     });
     this.clouds?.loadWeather(this.dataUrl('capas/lluvia.bin', new URL('../data/capas/lluvia.bin', import.meta.url).href)).then(() => this.wake());
 
@@ -818,9 +835,47 @@ export class ReliefEngine {
   /* ================= API pública ================= */
   setLayer(key: LayerKey, on: boolean) { this.layers[key] = on; this.applyLayers(); this.labelsDirty = true; this.invalidate(); }
   setExaggeration(x: number) { this.exTarget = x; this.touch(); this.wake(); }
-  setHour(h: number) { this.hour = h; this.placeSun(); this.invalidate(); }
+  setHour(h: number) {
+    this.applyHour(h);
+    // nubes de hoy: al mover la hora se bajan las demás imágenes del día (primero las cercanas) y la hora ya no salta a
+    // la de la última imagen
+    if (this.clouds?.isLive) { this.liveHourSet = true; this.clouds.wantDay(); }
+  }
+  private applyHour(h: number) { this.hour = h; this.placeSun(); this.invalidate(); }
   /** Cielo: tipo de nubes, cantidad, viento y lapso de tiempo (la capa se enciende con setLayer('clouds')). */
-  setClouds(s: Partial<CloudSettings>) { this.clouds?.set(s); this.invalidate(); }
+  setClouds(s: Partial<CloudSettings>) {
+    const cl = this.clouds;
+    if (!cl) return;
+    const was = cl.isLive;
+    // de vuelta a hoy: la hora vuelve a ponerse en la de la última imagen (con otro día se queda la que se ve)
+    if ('day' in s && s.day !== cl.settings.day) this.liveHourSet = false;
+    cl.set(s);
+    if (was && !cl.isLive) {
+      // de vuelta a las simuladas: el Sol de hoy
+      this.liveHourSet = false;
+      this.ymd = todayInMexico();
+      this.placeSun();
+    }
+    if (cl.isLive && s.play) cl.wantDay();
+    this.invalidate();
+  }
+
+  /** Nubes de hoy: el Sol del día que se muestra y, al llegar la primera imagen, la hora de esa imagen. */
+  private onLive(s: LiveCloudsStatus) {
+    const ymd = this.clouds?.liveYmd;
+    if (ymd && ymd.join() !== this.ymd.join()) { this.ymd = ymd; this.placeSun(); }
+    // (la lista de horas puede llegar después de la imagen: se revisa con cada aviso)
+    if (!this.liveHourSet && this.clouds?.liveHasNewest && s.lastHour !== undefined) {
+      this.liveHourSet = true;
+      const h = Math.min(20.5, Math.max(5, s.lastHour));
+      this.applyHour(h);
+      this.opts.onHourChange?.(h);
+    }
+    // abierto ya animando (?lapso): al llegar la primera imagen se piden las del día
+    if (this.clouds?.settings.play && s.loaded === 1) this.clouds.wantDay();
+    this.opts.onLiveClouds?.({ ...s, ...sunTimes(this.ymd, this.geo.latC, this.geo.lonC) });
+    this.invalidate();
+  }
   /** URL de un archivo de datos: carpeta pública si se configuró dataBaseUrl, si no la que resolvió el bundler. */
   dataUrl(name: string, bundled: string) {
     const base = this.opts.dataBaseUrl;
@@ -1557,6 +1612,13 @@ export class ReliefEngine {
     if (ambient) this.shared.uTime.value += dt;
     // las nubes avanzan con el lapso de tiempo (y despacio mientras el mapa gira solo); aparecen y se van con fundido
     if (sky?.step(dt, this.reduceMotion ? 0 : sky.playing ? 1 : c.autoRotate ? 0.25 : 0, intro >= 1)) active = true;
+    // nubes de hoy: «Animar» repite el día del satélite moviendo la hora del Sol (~0.6 h por segundo)
+    if (sky?.isLive && sky.playing && !this.reduceMotion) {
+      const st = sky.liveStatus, h0 = Math.max(5, Math.min(20, st?.firstHour ?? 5)), h1 = Math.min(20.5, Math.max(h0 + 0.5, st?.lastHour ?? 20.5));
+      this.applyHour(this.hour + dt * 0.6 > h1 + 0.25 || this.hour < h0 - 0.01 ? h0 : Math.min(h1, this.hour + dt * 0.6));
+      if (now - this.hourEmit > 120) { this.hourEmit = now; this.opts.onHourChange?.(this.hour); }
+      active = true;
+    }
     const dist = this.curDist();
     this.shared.uHazeRef.value = dist;
     // la sombra del bloque sobre el suelo se desvanece de cerca (cada texel de la sombra mide ~70 m)

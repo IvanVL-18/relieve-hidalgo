@@ -171,6 +171,41 @@
 .rh-sky-play[aria-pressed="true"] { background: var(--rh-accent); border-color: var(--rh-accent); color: #1a1408; }
 .rh-sky-play:disabled { opacity: 0.45; cursor: default; }
 .rh-sky-note { font-size: 0.58rem; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* nubes de hoy: origen (simuladas o satélite), estado de la imagen y, bajo la hora del sol, las horas con imagen */
+.rh-seg2 button { font-size: 0.75rem; }
+/* día de las imágenes: ‹ fecha › Hoy (los últimos 90 días del archivo de GIBS); en un panel angosto «Hoy» baja de renglón */
+.rh-live-day { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.rh-live-day input[type="date"] {
+  flex: 1 1 106px; min-width: 106px; height: 30px; margin: 0; padding: 0 6px 0 8px; border-radius: 8px; border: 1px solid var(--rh-line);
+  background: rgba(238, 241, 245, 0.06); color: var(--rh-fg); font: 500 0.75rem/1 var(--rh-font-mono); font-variant-numeric: tabular-nums;
+}
+.rh-live-day input[type="date"]:focus-visible { outline: 2px solid var(--rh-accent); outline-offset: 2px; }
+.rh-live-day input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: 0.75; }
+.rh-day-step, .rh-day-today {
+  appearance: none; height: 30px; padding: 0; border-radius: 8px; border: 1px solid var(--rh-line); background: transparent; color: var(--rh-fg);
+  cursor: pointer; transition: border-color 0.2s, opacity 0.2s;
+}
+.rh-day-step { flex: none; width: 28px; display: grid; place-items: center; }
+.rh-day-step svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.rh-day-prev svg { transform: rotate(90deg); }
+.rh-day-next svg { transform: rotate(-90deg); }
+.rh-day-today { flex: none; padding: 0 10px; font: 500 0.75rem/1 var(--rh-font-ui); }
+.rh-live-day .rh-day-today { margin-left: auto; }
+.rh-day-today[hidden] { display: none; }
+.rh-day-step:hover:not(:disabled), .rh-day-today:hover:not(:disabled) { border-color: rgba(238, 241, 245, 0.4); }
+.rh-day-step:disabled, .rh-day-today:disabled { opacity: 0.4; cursor: default; }
+.rh-live { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 34px; }
+.rh-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rh-muted); }
+.rh-live-ready { background: #7fd49b; box-shadow: 0 0 0 3px rgba(127, 212, 155, 0.18); }
+.rh-live-loading { background: var(--rh-accent); animation: rh-pulse 1.1s ease-in-out infinite; }
+.rh-live-error { background: #f08a7a; }
+.rh-live-text { display: grid; gap: 2px; min-width: 0; }
+.rh-live-text b { font-weight: 600; font-size: 0.82rem; }
+.rh-live-text .rh-mono { font-size: 0.58rem; line-height: 1.5; }
+.rh-live-text svg { width: 10px; height: 10px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; vertical-align: -1px; }
+.rh-link { appearance: none; border: 0; background: none; padding: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--rh-accent); text-decoration: underline; cursor: pointer; }
+.rh-live-track { position: relative; height: 3px; margin-top: 3px; border-radius: 2px; background: rgba(238, 241, 245, 0.06); }
+.rh-live-track i { position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 2px; background: rgba(143, 211, 240, 0.75); }
 .rh-credits, .rh-keys { line-height: 1.6; font-size: 0.6rem; }
 
 /* minimapa */
@@ -251,6 +286,7 @@
 
 @keyframes rh-spin { to { transform: rotate(360deg); } }
 @keyframes rh-in { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes rh-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) {
   .rh-root *, .rh-stage { transition: none !important; animation: none !important; }
 }
