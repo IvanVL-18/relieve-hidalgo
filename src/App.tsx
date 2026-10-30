@@ -18,16 +18,20 @@ const keepUrl = (s: ViewState) => history.replaceState(history.state, '', viewSt
 /**
  * Pantalla completa, como el artefacto. La URL guarda la vista (enlaces a vistas, shared/enlaces.ts): ?vista=lon,lat,km,
  * inclinación,rumbo · ?mapa=satelite|altitud · ?hora=19.5 · ?exag=3 · ?nubes=auto|cumulos|nublado|niebla|tormenta|no ·
- * ?mun=13048 · ?analisis=accesibilidad (con sus parámetros a.*). Además: ?quieto · ?embed · ?lapso (nubes en movimiento)
+ * ?mun=13048 · ?analisis=accesibilidad (con sus parámetros a.*). Además: ?quieto · ?embed · ?lapso (nubes en movimiento) ·
+ * ?kiosco (recorrido guiado en bucle para un módulo táctil) · ?escuelas (interfaz simplificada para clase)
  */
 export function App() {
   const qs = new URLSearchParams(location.search);
   if (qs.has('embed')) return <EmbedDemo />;
+  const mode = qs.has('kiosco') ? 'kiosco' : qs.has('escuelas') ? 'escuelas' : 'normal';
   return (
     <RelieveHidalgo
       style={{ position: 'fixed', inset: 0, height: 'auto' }}
+      mode={mode}
       initialView={decodeViewState(location.search)}
-      onViewChange={keepUrl}
+      // en el kiosco la URL no cambia (se recarga igual si alguien la toca)
+      onViewChange={mode === 'kiosco' ? undefined : keepUrl}
       initialClouds={qs.has('lapso') ? { play: true } : undefined}
       autoRotate={!qs.has('quieto')}
       {...debugHooks}

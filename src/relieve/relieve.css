@@ -41,6 +41,9 @@
   transition: background 0.6s;
 }
 .rh-stage canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
+/* grabación (video o imagen grande): el lienzo muestra el cuadro con su proporción y el mapa no responde */
+.rh-capturing .rh-stage canvas { object-fit: contain; pointer-events: none; background: #000; }
+.rh-capturing .rh-labels, .rh-capturing .rh-tag { visibility: hidden; }
 
 .rh-hud {
   position: absolute; inset: 0; pointer-events: none; z-index: 2;
@@ -427,6 +430,107 @@
 .rh-a-pcross line { stroke: rgba(238, 241, 245, 0.55); stroke-width: 1; }
 .rh-a-gradient { height: 8px; border-radius: 2px; margin-top: 4px; }
 .rh-a-gradticks { display: flex; justify-content: space-between; font-size: 0.58rem; margin-top: 2px; }
+/* botón principal de un análisis (descargar, reproducir, grabar) */
+.rh-a-btn {
+  appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%;
+  padding: 10px 14px; border: 0; border-radius: 9px; cursor: pointer;
+  font: 600 0.88rem/1 var(--rh-font-ui); color: var(--rh-bg); background: var(--rh-accent);
+}
+.rh-a-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.rh-a-btn:disabled { cursor: default; opacity: 0.45; }
+.rh-a-btn:focus-visible { outline: 2px solid var(--rh-fg); outline-offset: 2px; }
+.rh-a-btn .rh-spinner { border-color: rgba(6, 8, 13, 0.25); border-top-color: var(--rh-bg); }
+.rh-a-btn2 { background: rgba(238, 241, 245, 0.1); color: var(--rh-fg); }
+/* recorridos guiados */
+.rh-tour { display: grid; gap: 10px; }
+.rh-tour-bar { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr); align-items: center; gap: 4px; }
+.rh-tour-prev svg { transform: rotate(90deg); }
+.rh-tour-next svg { transform: rotate(-90deg); }
+.rh-tour-play {
+  appearance: none; width: 38px; height: 38px; border-radius: 50%; border: 0; display: grid; place-items: center; cursor: pointer;
+  background: var(--rh-accent); color: var(--rh-bg); margin: 0 2px;
+}
+.rh-tour-play svg { width: 18px; height: 18px; stroke: currentColor; fill: currentColor; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.rh-tour-play:focus-visible { outline: 2px solid var(--rh-fg); outline-offset: 2px; }
+.rh-tour-track { position: relative; display: flex; gap: 3px; height: 22px; align-items: center; margin-left: 6px; }
+.rh-tour-track button {
+  appearance: none; flex: 1; height: 6px; border: 0; padding: 0; border-radius: 3px; cursor: pointer;
+  background: rgba(238, 241, 245, 0.16); transition: background 0.2s;
+}
+.rh-tour-track button.done { background: rgba(255, 207, 122, 0.55); }
+.rh-tour-track button.on { background: var(--rh-accent); }
+.rh-tour-track button:hover { background: rgba(238, 241, 245, 0.45); }
+.rh-tour-track i { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--rh-fg); border-radius: 1px; pointer-events: none; opacity: 0.7; }
+.rh-tour-card { display: grid; gap: 4px; }
+.rh-tour-card h4 { margin: 0; font-size: 1.12rem; font-weight: 600; line-height: 1.2; }
+.rh-tour-card p { margin: 0; font-size: 0.86rem; line-height: 1.5; transition: opacity 0.4s; }
+.rh-tour-card p.rh-tour-dim { opacity: 0.45; }
+.rh-tour-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.rh-tour-list button {
+  appearance: none; width: 100%; display: flex; gap: 10px; align-items: baseline; text-align: left; padding: 5px 6px; border: 0; border-radius: 6px;
+  background: none; color: var(--rh-fg); font: 400 0.82rem/1.3 var(--rh-font-ui); cursor: pointer;
+}
+.rh-tour-list button span { font: 500 0.7rem/1 var(--rh-font-mono); color: var(--rh-muted); min-width: 1.4em; text-align: right; }
+.rh-tour-list button:hover { background: rgba(238, 241, 245, 0.06); }
+.rh-tour-list button[aria-current="true"] { background: rgba(255, 207, 122, 0.12); }
+.rh-tour-list button[aria-current="true"] span { color: var(--rh-accent); }
+/* kiosco: solo el título arriba y la tarjeta del recorrido abajo, en grande */
+.rh-kiosco .rh-tl { grid-row: 1 / 4; max-width: 640px; justify-content: space-between; }
+.rh-kiosco .rh-apanel > header { display: none; }
+.rh-kiosco .rh-apanel-body { padding: 18px 22px 16px; }
+.rh-kiosco .rh-tour-card h4 { font-size: 1.7rem; }
+.rh-kiosco .rh-tour-card p { font-size: 1.12rem; }
+.rh-kiosco .rh-tour-play { width: 52px; height: 52px; }
+.rh-kiosco .rh-title { font-size: 1.8rem; }
+/* ficha de un geositio o Pueblo Mágico */
+.rh-geo-card { display: grid; gap: 6px; padding-bottom: 2px; }
+.rh-geo-card figure { margin: 0 0 4px; display: grid; gap: 4px; }
+.rh-geo-card img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 8px; background: rgba(238, 241, 245, 0.06); }
+.rh-geo-card figcaption { font-size: 0.64rem; line-height: 1.35; color: var(--rh-muted); }
+.rh-geo-card figcaption a { color: inherit; }
+.rh-geo-card h4 { margin: 0; font-size: 1.05rem; font-weight: 600; line-height: 1.2; }
+.rh-geo-card p { margin: 0; font-size: 0.84rem; line-height: 1.5; }
+.rh-geo-actions { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; margin-top: 4px; }
+.rh-geo-actions .rh-a-btn2 { width: 40px; font-size: 1.1rem; }
+.rh-geo-card > .rh-a-link { justify-self: start; }
+/* modo escuelas: leyendas que se pueden tocar, fichas y preguntas */
+.rh-edu-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.rh-edu-legend button {
+  appearance: none; width: 100%; display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; align-items: center; text-align: left;
+  padding: 5px 6px; border: 0; border-radius: 6px; background: none; color: var(--rh-fg); font: 400 0.82rem/1.25 var(--rh-font-ui); cursor: pointer;
+}
+.rh-edu-legend button:hover { background: rgba(238, 241, 245, 0.06); }
+.rh-edu-legend button[aria-pressed="true"] { background: rgba(255, 207, 122, 0.12); }
+.rh-edu-legend i { width: 14px; height: 14px; border-radius: 3px; }
+.rh-edu-legend small { color: var(--rh-muted); font-family: var(--rh-font-mono); font-size: 0.66rem; }
+.rh-edu-legend b { font: 500 0.72rem/1 var(--rh-font-mono); color: var(--rh-muted); }
+.rh-edu-card, .rh-edu-quiz { display: grid; gap: 6px; padding: 10px 12px; border-radius: 10px; background: rgba(238, 241, 245, 0.05); border: 1px solid var(--rh-line); }
+.rh-edu-card h4, .rh-edu-quiz h4 { margin: 0; font-size: 1.02rem; font-weight: 600; line-height: 1.25; }
+.rh-edu-card p, .rh-edu-quiz p { margin: 0; font-size: 0.84rem; line-height: 1.5; }
+.rh-edu-options { display: grid; gap: 6px; }
+.rh-edu-options button {
+  appearance: none; text-align: left; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--rh-line); background: rgba(238, 241, 245, 0.04);
+  color: var(--rh-fg); font: 500 0.86rem/1.3 var(--rh-font-ui); cursor: pointer;
+}
+.rh-edu-options button:hover:not(:disabled) { border-color: rgba(238, 241, 245, 0.4); }
+.rh-edu-options button:disabled { cursor: default; }
+.rh-edu-options button.ok { border-color: #199e70; background: rgba(25, 158, 112, 0.18); }
+.rh-edu-options button.no { border-color: #d95926; background: rgba(217, 89, 38, 0.16); }
+.rh-edu-quiz .rh-geo-actions { grid-template-columns: 1fr auto; }
+.rh-edu-see { width: auto !important; font-size: 0.82rem !important; padding: 10px 12px; }
+/* interfaz de escuelas: letra un poco más grande en los paneles */
+.rh-escuelas .rh-apanel-body { font-size: 15px; }
+.rh-escuelas .rh-a-lead, .rh-escuelas .rh-edu-card p, .rh-escuelas .rh-edu-quiz p { font-size: 0.95rem; }
+.rh-escuelas .rh-a-note { font-size: 0.8rem; }
+.rh-escuelas .rh-tl { max-width: 420px; }
+/* avance de una grabación */
+.rh-a-progress { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; font-size: 0.76rem; font-variant-numeric: tabular-nums; }
+.rh-a-ptrack { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: rgba(238, 241, 245, 0.12); overflow: hidden; }
+.rh-a-ptrack i { display: block; height: 100%; background: var(--rh-accent); transition: width 0.25s; }
+.rh-a-video { width: 100%; max-height: 300px; border-radius: 8px; background: #000; object-fit: contain; }
+/* vista previa (impresión 3D, video) */
+.rh-a-preview { width: 100%; max-height: 260px; display: grid; place-items: center; border-radius: 8px; background: rgba(238, 241, 245, 0.04); }
+.rh-a-preview canvas { max-width: 100%; max-height: 260px; }
 .rh-a-keyrow { display: inline-flex; align-items: center; gap: 4px; }
 .rh-a-keyrow i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
 .rh-a-keyrow i.rh-a-keyline { height: 2px; width: 10px; margin-left: 6px; }

@@ -1,0 +1,16 @@
+{
+  "fuente": "Secretaría de Cultura del Estado de Hidalgo, Centro de Investigaciones Históricas y Culturales: «Regiones Geoculturales del estado de Hidalgo» (mapa, enero de 2019; elaboró Yatzin Montiel V., con el Marco Geoestadístico de INEGI 2016). Asignación de cada municipio leída del mapa.",
+  "nota": "El número de regiones y sus límites cambian según la obra consultada; aquí se sigue el mapa de la Secretaría de Cultura, que pone a Pachuca y Mineral de la Reforma en la Cuenca de México y a Pisaflores en la Huasteca.",
+  "regiones": [
+    { "id": "huasteca", "nombre": "Huasteca", "municipios": ["Atlapexco", "Huautla", "Huazalingo", "Huejutla de Reyes", "Jaltocán", "Pisaflores", "San Felipe Orizatlán", "Xochiatipan", "Yahualica"] },
+    { "id": "sierra-gorda", "nombre": "Sierra Gorda", "municipios": ["Chapulhuacán", "Jacala de Ledezma", "La Misión", "Nicolás Flores", "Pacula", "Zimapán"] },
+    { "id": "sierra-alta", "nombre": "Sierra Alta", "municipios": ["Calnali", "Juárez Hidalgo", "Lolotla", "Molango de Escamilla", "Tepehuacán de Guerrero", "Tianguistengo", "Tlahuiltepa", "Tlanchinol", "Xochicoatlán", "Zacualtipán de Ángeles"] },
+    { "id": "sierra-baja", "nombre": "Sierra Baja", "municipios": ["Atotonilco el Grande", "Eloxochitlán", "Metztitlán", "San Agustín Metzquititlán"] },
+    { "id": "sierra-oriental", "nombre": "Sierra Oriental (otomí-tepehua y nahua)", "municipios": ["Acaxochitlán", "Agua Blanca de Iturbide", "Huehuetla", "San Bartolo Tutotepec", "Tenango de Doria"] },
+    { "id": "mezquital", "nombre": "Valle del Mezquital", "municipios": ["Actopan", "Ajacuba", "Alfajayucan", "El Arenal", "Atitalaquia", "Atotonilco de Tula", "Cardonal", "Chapantongo", "Chilcuautla", "Francisco I. Madero", "Huichapan", "Ixmiquilpan", "Mixquiahuala de Juárez", "Nopala de Villagrán", "Progreso de Obregón", "San Agustín Tlaxiaca", "San Salvador", "Santiago de Anaya", "Tasquillo", "Tecozautla", "Tepeji del Río de Ocampo", "Tepetitlán", "Tetepango", "Tezontepec de Aldama", "Tlahuelilpan", "Tlaxcoapan", "Tula de Allende"] },
+    { "id": "comarca", "nombre": "Comarca Minera", "municipios": ["Huasca de Ocampo", "Mineral del Chico", "Mineral del Monte", "Omitlán de Juárez"] },
+    { "id": "tulancingo", "nombre": "Valle de Tulancingo", "municipios": ["Acatlán", "Cuautepec de Hinojosa", "Metepec", "Santiago Tulantepec de Lugo Guerrero", "Tulancingo de Bravo"] },
+    { "id": "cuenca", "nombre": "Cuenca de México", "municipios": ["Mineral de la Reforma", "Pachuca de Soto", "Tizayuca", "Tolcayuca", "Villa de Tezontepec", "Zapotlán de Juárez"] },
+    { "id": "altiplanicie", "nombre": "Altiplanicie Pulquera", "municipios": ["Almoloya", "Apan", "Emiliano Zapata", "Epazoyucan", "Singuilucan", "Tepeapulco", "Tlanalapa", "Zempoala"] }
+  ]
+}

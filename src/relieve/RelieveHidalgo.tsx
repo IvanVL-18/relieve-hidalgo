@@ -8,7 +8,8 @@ import './relieve.css';
 
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from 'react';
 import type { Datasets } from './analyses/datasets';
-import { ANALYSES } from './analyses/registry';
+import { ANALYSES, SCHOOL_ANALYSES } from './analyses/registry';
+import type { SceneApi, SceneChange, ViewerMode } from './analyses/types';
 import type { LayerKey, Layers, LoadStage, MunicipioInfo, ReadyInfo, ReliefEngine } from './engine/Engine';
 import { CLOUD_DEFAULTS, CLOUD_KINDS, skyFor, windName, type CloudKind, type CloudSettings } from './shared/clouds';
 import { archiveRange, dayIso, dayStartOf, mxHour, type LiveCloudsStatus } from './shared/goes';
@@ -78,6 +79,11 @@ export interface RelieveHidalgoProps {
   showMinimap?: boolean;
   /** botón y panel de análisis */
   showAnalyses?: boolean;
+  /**
+   * 'kiosco': módulo táctil para ferias (abre el recorrido guiado en bucle, sin buscador, menú ni paneles) ·
+   * 'escuelas': interfaz simplificada con los temas para clase (regiones, relieve, ríos, climas y preguntas)
+   */
+  mode?: ViewerMode;
   /** colores por municipio (clave INEGI → color CSS), p. ej. de un indicador del laboratorio */
   municipioColors?: Record<string, string> | null;
   onSelectMunicipio?: (m: MunicipioInfo | null) => void;
@@ -112,11 +118,14 @@ const whenIdle = (fn: () => void) => (typeof requestIdleCallback === 'function' 
 const altRampCss = 'linear-gradient(90deg,' + ALT_STOPS_HEX.filter(s => s[0] <= 3300).map(([e, c]) => `${c} ${((e / 3300) * 100).toFixed(1)}%`).join(',') + ')';
 
 export function RelieveHidalgo(props: RelieveHidalgoProps) {
+  const mode = props.mode ?? 'normal', kiosk = mode === 'kiosco';
   const {
-    className, style, title = 'Relieve de Hidalgo', showSearch = true, showLegend = true, showPanel = true, showMinimap = true, showAnalyses = true, showShare = true,
+    className, style, title = 'Relieve de Hidalgo', showLegend = true, showPanel = true, showMinimap = true, showAnalyses = true, showShare = true,
   } = props;
+  // en el kiosco solo queda el recorrido (y el botón de pantalla completa)
+  const showSearch = (props.showSearch ?? true) && !kiosk;
   const iv = props.initialView ?? {};
-  const firstAnalysis = iv.analysis ?? props.initialAnalysis ?? null;
+  const firstAnalysis = iv.analysis ?? props.initialAnalysis ?? (kiosk ? 'recorridos' : mode === 'escuelas' ? 'escuelas' : null);
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement>(null);
@@ -184,7 +193,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
             onLiveClouds: s => setLive(s),
             onHourChange: h => setHour(h),
             // un enlace con vista abre quieto en ella
-            autoRotate: (props.autoRotate ?? true) && !iv.view,
+            autoRotate: (props.autoRotate ?? true) && !iv.view && !kiosk,
             cooperativeGestures: props.cooperativeGestures ?? false,
             debug: props.debug,
             onProgress: s => setStage(s),
@@ -252,6 +261,12 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   // enlaces a vistas: el estado se arma al momento con lo último de cada cosa
   const linkRef = useRef({ baseMap, hour, exag, layers, clouds, selected, analysis, params, ready });
   linkRef.current = { baseMap, hour, exag, layers, clouds, selected, analysis, params, ready };
+  // la escena para los análisis (ctx.scene): lee lo último y cambia por applyScene (definida más abajo)
+  const applyScene = useRef<(ch: SceneChange) => void>(() => undefined);
+  const sceneApi = useRef<SceneApi>({
+    get: () => { const L = linkRef.current; return { baseMap: L.baseMap, hour: L.hour, exaggeration: L.exag, layers: { ...L.layers }, clouds: { ...L.clouds } }; },
+    set: ch => applyScene.current(ch),
+  }).current;
   const viewState = (): ViewState | null => {
     const e = engineRef.current, L = linkRef.current;
     if (!e || !L.ready) return null;
@@ -338,12 +353,26 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
     propsRef.current.onAnalysisChange?.(id);
   }, []);
   const closeMenu = useCallback(() => setMenuOpen(false), []);
+  // ajustes de la escena que piden los análisis (recorridos, video…): pasan por los mismos estados que el panel
+  applyScene.current = ch => {
+    const L = linkRef.current, e = eng();
+    if (ch.baseMap !== undefined && ch.baseMap !== L.baseMap) { chooseBase(ch.baseMap); L.baseMap = ch.baseMap; }
+    if (ch.hour !== undefined) { const h = Math.min(20.5, Math.max(5, ch.hour)); setHour(h); e?.setHour(h); L.hour = h; }
+    if (ch.exaggeration !== undefined) { const x = Math.min(6, Math.max(1, ch.exaggeration)); setExag(x); e?.setExaggeration(x); L.exag = x; }
+    if (ch.layers) {
+      const next = { ...L.layers, ...ch.layers };
+      for (const k of Object.keys(ch.layers) as LayerKey[]) if (next[k] !== L.layers[k]) e?.setLayer(k, next[k]);
+      setLayers(next);
+      L.layers = next;
+    }
+    if (ch.clouds) { updateClouds(ch.clouds); L.clouds = { ...L.clouds, ...ch.clouds }; }
+  };
   const engine = eng();
   const baseCredit = BASE_MAPS.find(b => b.id === baseMap)?.credit;
   const activeDef = analysis ? ANALYSES.find(a => a.id === analysis && a.load) : undefined;
 
   return (
-    <div ref={rootRef} className={'rh-root' + (className ? ' ' + className : '')} style={style} role="region" aria-label={title}>
+    <div ref={rootRef} className={'rh-root' + (mode !== 'normal' ? ' rh-' + mode : '') + (className ? ' ' + className : '')} style={style} role="region" aria-label={title}>
       <div className="rh-stage" ref={stageRef} />
       <div className="rh-labels" ref={labelsRef} aria-hidden="true" />
 
@@ -363,12 +392,15 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
             </div>
           </div>
           {showSearch && <SearchBox disabled={!ready} version={placesVersion} search={q => eng()?.search(q) ?? []} onChoose={(r: SearchItem) => eng()?.flyToItem(r)} />}
-          {showAnalyses && (
+          {showAnalyses && !kiosk && (
             <button type="button" className="rh-menu-btn" aria-expanded={menuOpen} aria-haspopup="dialog" disabled={!ready} onClick={() => setMenuOpen(!menuOpen)}>
-              <IconGrid />Análisis{activeDef && <span>{activeDef.titulo}</span>}
+              <IconGrid />{mode === 'escuelas' ? 'Temas' : 'Análisis'}{activeDef && <span>{activeDef.titulo}</span>}
             </button>
           )}
-          {activeDef && engine && datasets && <AnalysisPanel id={activeDef.id} engine={engine} datasets={datasets} small={small} onClose={() => openAnalysis(null)} initialParams={linkParams.current} onParams={setParams} />}
+          {activeDef && engine && datasets && (
+            <AnalysisPanel id={activeDef.id} engine={engine} datasets={datasets} small={small} onClose={kiosk ? undefined : () => openAnalysis(null)}
+              initialParams={linkParams.current} onParams={setParams} scene={sceneApi} mode={mode} />
+          )}
           {!activeDef && selected && (
             <section className="rh-card" aria-label={`Municipio ${selected.name}`}>
               <header>
@@ -391,7 +423,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
         </div>
 
         <div className="rh-tr">
-          {showLegend && (
+          {showLegend && !kiosk && (
             <div className={'rh-legend' + (baseMap === 'usodesuelo' ? ' rh-legend-wide' : '')} aria-label={baseMap === 'altitud' ? 'Escala de altitud' : baseMap === 'usodesuelo' ? 'Uso del suelo y vegetación' : 'Imagen satelital'}>
               {baseMap === 'altitud' && (
                 <>
@@ -411,6 +443,8 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
             </div>
           )}
           <div className="rh-rail" role="group" aria-label="Navegación">
+            {/* en el kiosco solo queda la pantalla completa */}
+            {!kiosk && <>
             <button type="button" title="Acercar (+)" aria-label="Acercar" onClick={() => eng()?.zoomBy(0.6)}><IconPlus /></button>
             <button type="button" title="Alejar (−)" aria-label="Alejar" onClick={() => eng()?.zoomBy(1.6)}><IconMinus /></button>
             <div className="rh-sep" />
@@ -420,13 +454,14 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
             <div className="rh-sep" />
             <button type="button" title="Descargar imagen" aria-label="Descargar imagen de la vista" disabled={!ready} onClick={download}><IconCamera /></button>
             {showShare && <button type="button" title="Copiar enlace a esta vista" aria-label="Copiar enlace a esta vista" disabled={!ready} onClick={share}><IconLink /></button>}
+            </>}
             {typeof document !== 'undefined' && document.fullscreenEnabled && (
               <button type="button" title={full ? 'Salir de pantalla completa' : 'Pantalla completa'} aria-label={full ? 'Salir de pantalla completa' : 'Pantalla completa'} onClick={toggleFull}>{full ? <IconShrink /> : <IconExpand />}</button>
             )}
           </div>
         </div>
 
-        {showPanel && (
+        {showPanel && !kiosk && (
           <div className="rh-bl">
             <div className="rh-panel">
               <div className="rh-panel-head">
@@ -546,7 +581,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
           </div>
         )}
 
-        {showMinimap && (
+        {showMinimap && !kiosk && (
           <div className="rh-br">
             <div className="rh-mini">
               <canvas ref={miniRef} width={380} height={364} aria-label="Mapa de ubicación: toca para ir a un punto" />
@@ -562,7 +597,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
         <span className="rh-near" ref={tagNearRef} />
         <span className="rh-info" ref={tagInfoRef} hidden />
       </div>
-      {menuOpen && <AnalysisMenu active={analysis} onPick={openAnalysis} onClose={closeMenu} />}
+      {menuOpen && <AnalysisMenu active={analysis} onPick={openAnalysis} onClose={closeMenu} ids={mode === 'escuelas' ? SCHOOL_ANALYSES : undefined} />}
     </div>
   );
 }

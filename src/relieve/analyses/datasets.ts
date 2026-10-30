@@ -227,6 +227,48 @@ export function decodeServicios(buf: Uint8Array): Servicios {
   return { n, lon: r.arr(Float32Array, n), lat: r.arr(Float32Array, n), tipo: r.arr(Uint8Array, n), publico: r.arr(Uint8Array, n), nombre: r.str(), detalle: r.str() };
 }
 
+/** Geositio del Geoparque Comarca Minera o Pueblo Mágico, con su foto de Wikimedia Commons (si la hay). */
+export interface Sitio {
+  id: string;
+  tipo: 'geositio' | 'pueblo';
+  /** número del geositio en el catálogo del geoparque (1–31) */
+  n?: number;
+  nombre: string;
+  interes?: string;
+  grupo: 'geologia' | 'biota' | 'cultura' | 'pueblo';
+  municipio?: string;
+  /** año del nombramiento como Pueblo Mágico */
+  anio?: number;
+  lon: number;
+  lat: number;
+  texto: string;
+  foto: { url: string; autor: string; licencia: string; licenciaUrl: string; pagina: string } | null;
+}
+
+export interface Geoparque {
+  fuentes: Record<string, string>;
+  geoparque: { nombre: string; anio: number; municipios: string[]; rutas: string[] };
+  sitios: Sitio[];
+}
+
+/** Clase de un plano del modo escuelas, con su superficie en Hidalgo. */
+export interface ClaseEscuela { nombre: string; km2: number; pct: number; claves?: string[] }
+
+/** Modo escuelas: climas, provincias fisiográficas y topoformas de INEGI (rejilla de factor 2) y regiones geoculturales. */
+export interface Escuelas {
+  w: number;
+  h: number;
+  /** clase + 1 por pixel (0 = fuera de Hidalgo) */
+  clima: Uint8Array;
+  provincia: Uint8Array;
+  topoforma: Uint8Array;
+  fuentes: Record<string, string>;
+  nota: string;
+  clases: { clima: ClaseEscuela[]; provincia: ClaseEscuela[]; topoforma: ClaseEscuela[] };
+  /** municipios (1–84), habitantes, km² y la clase (índice) que más ocupa de cada plano */
+  regiones: { id: string; nombre: string; municipios: number[]; pob: number; km2: number; clima: number; provincia: number; topoforma: number }[];
+}
+
 export type ResolveUrl = (name: string, bundled: string) => string;
 
 /**
@@ -283,6 +325,29 @@ export function createDatasets(resolve: ResolveUrl, meta: Meta, terrain?: () => 
     }),
     /** traslados al trabajo y a la escuela entre municipios (muestra del Censo 2020) */
     movilidad: () => once('movilidad', () => json<Movilidad>(resolve('capas/movilidad.json', new URL('../data/capas/movilidad.json', import.meta.url).href))),
+    /** modo escuelas: climas, provincias y topoformas de INEGI y regiones geoculturales */
+    escuelas: () => once('escuelas', async () => {
+      const [bin, info] = await Promise.all([
+        fetchBin(resolve('capas/escuelas.bin', new URL('../data/capas/escuelas.bin', import.meta.url).href)),
+        json<{ fuentes: Escuelas['fuentes']; nota: string; clima: ClaseEscuela[]; provincia: ClaseEscuela[]; topoforma: ClaseEscuela[]; regiones: Escuelas['regiones'] }>(
+          resolve('capas/escuelas.json', new URL('../data/capas/escuelas.json', import.meta.url).href)),
+      ]);
+      const r = new BinReader(bin);
+      r.magic(0x315a4852, 'escuelas.bin');
+      const w = r.u32(), h = r.u32(), planes = r.u32();
+      if (planes !== 3) throw new Error('escuelas.bin: se esperaban 3 planos');
+      const clima = r.arr(Uint8Array, w * h), provincia = r.arr(Uint8Array, w * h), topoforma = r.arr(Uint8Array, w * h);
+      return { w, h, clima, provincia, topoforma, fuentes: info.fuentes, nota: info.nota, clases: { clima: info.clima, provincia: info.provincia, topoforma: info.topoforma }, regiones: info.regiones } as Escuelas;
+    }),
+    /** geositios del Geoparque Comarca Minera y Pueblos Mágicos, con foto (las URL de las fotos están en geoparque/fotos.ts) */
+    geoparque: () => once('geoparque', async () => {
+      const [g, { FOTOS }] = await Promise.all([
+        json<Omit<Geoparque, 'sitios'> & { sitios: (Omit<Sitio, 'foto'> & { foto: (Omit<NonNullable<Sitio['foto']>, 'url'> & { archivo: string }) | null })[] }>(
+          resolve('capas/geoparque.json', new URL('../data/capas/geoparque.json', import.meta.url).href)),
+        import('./geoparque/fotos'),
+      ]);
+      return { ...g, sitios: g.sitios.map(s => ({ ...s, foto: s.foto && FOTOS[s.id] ? { ...s.foto, url: resolve('capas/' + s.foto.archivo, FOTOS[s.id]) } : null })) } as Geoparque;
+    }),
     /** pendiente a 30 m resumida por nodo del visor (media, % > 15° y > 30°) */
     pendiente: () => once('pendiente', async () => decodePendiente(await fetchBin(resolve('capas/pendiente.bin', new URL('../data/capas/pendiente.bin', import.meta.url).href)))),
     /** nombres de los ríos de OSM sobre el cauce calculado a 90 m (ríos de una cuenca, camino del agua) */

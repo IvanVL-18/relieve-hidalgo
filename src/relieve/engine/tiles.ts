@@ -25,6 +25,8 @@ export interface TileSetOptions<T> {
   onEvict?(index: number): void;
   /** algo cambió y hay que dibujar */
   onChange(): void;
+  /** reloj de los fundidos (ms; el del motor, que al grabar avanza cuadro por cuadro) */
+  now?(): number;
 }
 
 interface Slot { index: number; x: number; y: number; t0: number; used: number }
@@ -39,6 +41,7 @@ export class TileSet<T> {
   private alive = true;
   /** teselas deseadas en la última actualización (índice → prioridad) */
   private want = new Map<number, number>();
+  private failed = new Set<number>();
   failures = 0;
 
   constructor(private o: TileSetOptions<T>) {
@@ -47,6 +50,14 @@ export class TileSet<T> {
 
   get info() { return this.o.info; }
   get count() { return this.resident.size; }
+  /** la tesela ya está en el atlas (o no se pudo bajar: no se espera por ella) */
+  ready(i: number) { return this.resident.has(i) || this.failed.has(i); }
+  /** no queda nada en camino de lo deseado: todo cargado o el atlas lleno de teselas deseadas */
+  get settled() {
+    if (this.pending.size) return false;
+    for (const i of this.want.keys()) if (!this.ready(i)) return !this.free.length && ![...this.resident.values()].some(s => !this.want.has(s.index));
+    return true;
+  }
 
   /** Pide las teselas deseadas (índice → prioridad; menor = más urgente) y libera ranuras si hace falta. */
   update(want: Map<number, number>, now: number) {
@@ -80,17 +91,19 @@ export class TileSet<T> {
     this.pending.add(i);
     this.o.load(i).then(p => {
       this.pending.delete(i);
-      if (!this.alive || !p) return;
+      if (!this.alive) return;
+      if (!p) { this.failed.add(i); return; }
       if (!this.free.length && !this.evictOne()) return;
       const [x, y] = this.free.pop()!;
       this.o.upload(p, x * this.o.slotPx, y * this.o.slotPx);
-      const now = performance.now();
+      const now = this.o.now?.() ?? performance.now();
+      this.failed.delete(i);
       this.resident.set(i, { index: i, x, y, t0: now, used: now });
       this.setPage(i, x, y, 0, 255);
       this.fading++;
       this.o.onResident?.(i, p);
       this.o.onChange();
-    }, () => { this.pending.delete(i); this.failures++; });
+    }, () => { this.pending.delete(i); this.failed.add(i); this.failures++; });
   }
 
   private setPage(i: number, x: number, y: number, fade: number, on: number) {

@@ -1,0 +1,190 @@
+[
+  {
+    "id": "hidalgo",
+    "titulo": "Hidalgo de un vistazo",
+    "resumen": "De la Huasteca a la Comarca Minera: las regiones del estado en 12 paradas,",
+    "paradas": [
+      {
+        "titulo": "Hidalgo",
+        "texto": "Unos 20 800 km², 84 municipios y 3 082 841 habitantes (Censo 2020). El estado va de 44 m sobre el nivel del mar, en la Huasteca, a 3 379 m en el sur. Aquí se juntan tres provincias del relieve: la Sierra Madre Oriental, el Eje Neovolcánico y la Llanura Costera del Golfo.",
+        "enlace": "vista=-98.86,20.47,300,48,6&mapa=usodesuelo&nubes=no&exag=2.5",
+        "luz": "tarde"
+      },
+      {
+        "titulo": "La Huasteca",
+        "texto": "Lomeríos cálidos y húmedos, casi todos entre 100 y 600 m de altitud, donde llueven más de 1 300 mm al año. Huejutla de Reyes, con 126 781 habitantes en su municipio, es la ciudad principal; en muchas comunidades se habla náhuatl.",
+        "enlace": "vista=-98.42,21.14,30,64,-40&mapa=satelite&nubes=cumulos",
+        "cantidad": 0.25,
+        "luz": "manana",
+        "marca": "Huejutla de Reyes"
+      },
+      {
+        "titulo": "La Sierra Alta",
+        "texto": "La Sierra Madre Oriental cruza Hidalgo de noroeste a sureste. Entre Zacualtipán y Molango, la humedad que llega del golfo de México choca con las montañas: la neblina es frecuente y crece el bosque mesófilo de montaña.",
+        "enlace": "vista=-98.69,20.72,40,62,135&mapa=satelite&nubes=niebla",
+        "luz": "amanecer"
+      },
+      {
+        "titulo": "Barranca de Metztitlán",
+        "texto": "El río corta la sierra cientos de metros. En el fondo plano, la Vega, se siembra junto a la laguna, y en las laderas secas crece una enorme variedad de cactáceas. Es Reserva de la Biosfera desde el año 2000.",
+        "enlace": "vista=-98.8,20.63,22,66,45&mapa=satelite&nubes=no",
+        "luz": "mediodia"
+      },
+      {
+        "titulo": "Zimapán y la Sierra Gorda",
+        "texto": "Al noroeste, el río Moctezuma marca el límite con Querétaro. En su cañón está la presa Zimapán, que genera electricidad. Arriba, la Sierra Gorda: pueblos mineros como Zimapán y Jacala entre sierras de caliza.",
+        "enlace": "vista=-99.51,20.64,24,62,110&mapa=satelite&nubes=no",
+        "luz": "mediodia",
+        "marca": "Presa Zimapán"
+      },
+      {
+        "titulo": "Valle del Mezquital",
+        "texto": "Semiárido: en Ixmiquilpan llueven unos 360 mm al año. Es tierra hñähñu (otomí). Desde principios del siglo XX se riega con las aguas residuales del valle de México que llegan por el río Tula: por eso el verde de los cultivos contrasta con el matorral.",
+        "enlace": "vista=-99.2,20.42,45,58,25&mapa=usodesuelo&nubes=no",
+        "luz": "mediodia",
+        "marca": "Ixmiquilpan"
+      },
+      {
+        "titulo": "Tula",
+        "texto": "Aquí estuvo Tollan, la capital de los toltecas, entre los siglos X y XII. Sus Atlantes, guerreros de piedra de más de 4 m, siguen en lo alto de la Pirámide B, frente al valle del río Tula.",
+        "enlace": "vista=-99.3404,20.064,10,60,20&mapa=satelite&nubes=no",
+        "luz": "tarde",
+        "marca": "Zona arqueológica de Tula"
+      },
+      {
+        "titulo": "Pachuca",
+        "texto": "La capital, con 314 331 habitantes en su municipio. Creció con la plata: el distrito de Pachuca y Real del Monte dio unas 40 mil toneladas en casi 500 años y fue de los más ricos del mundo. Le dicen la Bella Airosa por sus vientos.",
+        "enlace": "vista=-98.735,20.115,20,62,-10&mapa=satelite&nubes=no",
+        "luz": "tarde",
+        "marca": "Pachuca de Soto"
+      },
+      {
+        "titulo": "Real del Monte y El Chico",
+        "texto": "Pueblos mineros a más de 2 300 m, entre bosques de oyamel y peñas de roca volcánica. Los mineros de Cornualles, en Inglaterra, trajeron aquí el paste en el siglo XIX. El bosque de El Chico se protegió en 1898: fue de las primeras áreas naturales protegidas del país.",
+        "enlace": "vista=-98.7,20.17,18,62,20&mapa=satelite&nubes=no",
+        "luz": "tarde"
+      },
+      {
+        "titulo": "Prismas Basálticos",
+        "texto": "En Huasca de Ocampo, el primer Pueblo Mágico del país (2001), el agua cae entre columnas de basalto de unos 2.6 millones de años que Alexander von Humboldt dibujó en 1803. Son uno de los 31 geositios del Geoparque Mundial de la UNESCO Comarca Minera.",
+        "enlace": "vista=-98.5634,20.2345,7,62,20&mapa=satelite&nubes=no",
+        "luz": "mediodia",
+        "marca": "Prismas Basálticos"
+      },
+      {
+        "titulo": "El altiplano",
+        "texto": "Al sur, los llanos de Apan y la laguna de Tecocomulco, a más de 2 400 m. Fue tierra de haciendas pulqueras y magueyes; hoy domina la cebada. Hacia Puebla y Tlaxcala está el punto más alto del estado: 3 379 m.",
+        "enlace": "vista=-98.4,19.82,40,60,165&mapa=usodesuelo&nubes=cumulos",
+        "luz": "atardecer"
+      },
+      {
+        "titulo": "De noche",
+        "texto": "Cada luz es una de las 4 690 localidades del censo, más brillante donde vive más gente. Las más grandes forman la franja del sur: Pachuca y Mineral de la Reforma, Tulancingo, Tizayuca y Tula.",
+        "enlace": "vista=-98.86,20.42,280,46,6&mapa=usodesuelo&nubes=no",
+        "luz": "noche"
+      }
+    ]
+  },
+  {
+    "id": "agua",
+    "titulo": "El camino del agua",
+    "resumen": "Del río Tula a la Huasteca: presas, riego, la laguna de Metztitlán y el Amajac;",
+    "paradas": [
+      {
+        "titulo": "El río Tula y la presa Endhó",
+        "texto": "El río Tula entra a Hidalgo con las aguas residuales del valle de México. La presa Endhó las guarda para el riego del Mezquital.",
+        "enlace": "vista=-99.37,20.12,22,62,10&mapa=satelite&nubes=no&exag=2.5",
+        "luz": "manana",
+        "marca": "Presa Endhó"
+      },
+      {
+        "titulo": "Riego en el Mezquital",
+        "texto": "Con esa agua se riegan los distritos de riego de Tula y Alfajayucan, de los más grandes del país que usan agua residual: alfalfa y maíz en medio del semidesierto.",
+        "enlace": "vista=-99.2,20.3,40,60,10&mapa=usodesuelo&nubes=no",
+        "luz": "mediodia"
+      },
+      {
+        "titulo": "El cañón del Moctezuma",
+        "texto": "Los ríos Tula y San Juan se juntan y forman el Moctezuma, que sigue hacia el norte por un cañón profundo. La presa Zimapán lo represa y genera electricidad.",
+        "enlace": "vista=-99.51,20.64,24,64,120&mapa=satelite&nubes=no",
+        "luz": "mediodia",
+        "marca": "Presa Zimapán"
+      },
+      {
+        "titulo": "Laguna de Metztitlán",
+        "texto": "Al fondo de la barranca, el río de Metztitlán forma una laguna que crece en la temporada de lluvias. Su agua riega la Vega, una franja de cultivos entre laderas secas.",
+        "enlace": "vista=-98.85,20.67,16,64,60&mapa=satelite&nubes=no",
+        "luz": "tarde",
+        "marca": "Laguna de Metztitlán"
+      },
+      {
+        "titulo": "El río Amajac",
+        "texto": "El Amajac reúne el agua de casi 7 000 km², desde la sierra de Pachuca hasta la Sierra Alta, y se une al Moctezuma rumbo al río Pánuco y el golfo de México.",
+        "enlace": "vista=-98.8,21.13,32,62,0&mapa=satelite&nubes=no",
+        "luz": "tarde"
+      },
+      {
+        "titulo": "La Huasteca",
+        "texto": "Es la región más lluviosa del estado: los ríos bajan llenos hacia la llanura costera de Veracruz, entre potreros, cañaverales y restos de selva.",
+        "enlace": "vista=-98.45,21.1,45,60,-20&mapa=satelite&nubes=cumulos",
+        "cantidad": 0.3,
+        "luz": "tarde"
+      }
+    ]
+  },
+  {
+    "id": "geoparque",
+    "titulo": "Geoparque Comarca Minera",
+    "resumen": "Geositios de la UNESCO: minerales que llevan el nombre de un cerro de Pachuca, peñas, obsidiana y prismas de basalto;",
+    "paradas": [
+      {
+        "titulo": "Geoparque Mundial de la UNESCO",
+        "texto": "Desde 2017 la Comarca Minera es Geoparque Mundial de la UNESCO: 9 municipios y 31 geositios entre la sierra de Pachuca y la barranca de Metztitlán, donde se juntan la Sierra Madre Oriental y el Eje Neovolcánico.",
+        "enlace": "vista=-98.65,20.17,48,56,10&mapa=satelite&nubes=no&exag=2.5",
+        "luz": "tarde"
+      },
+      {
+        "titulo": "Cerro de San Cristóbal",
+        "texto": "En este cerro de Pachuca se describieron por primera vez dos minerales: la tridimita (1868) y la cristobalita (1887), que lleva el nombre del cerro.",
+        "enlace": "vista=-98.7393,20.1408,10,58,-20&mapa=satelite&nubes=no",
+        "luz": "mediodia",
+        "marca": "Cerro de San Cristóbal"
+      },
+      {
+        "titulo": "Las peñas de El Chico",
+        "texto": "En el Parque Nacional El Chico, peñas de roca volcánica como Las Ventanas, Las Monjas y el Cuervo se levantan entre oyameles. Es un lugar clásico de la escalada en México.",
+        "enlace": "vista=-98.736,20.195,11,60,20&mapa=satelite&nubes=no",
+        "luz": "mediodia",
+        "marca": "Las Ventanas"
+      },
+      {
+        "titulo": "Peñas Cargadas",
+        "texto": "En Epazoyucan, enormes bloques de roca parecen sostenerse unos sobre otros: la erosión fue quitando la roca más blanda que los rodeaba.",
+        "enlace": "vista=-98.6267,20.1143,9,58,10&mapa=satelite&nubes=no",
+        "luz": "mediodia",
+        "marca": "Peñas Cargadas"
+      },
+      {
+        "titulo": "Cerro de las Navajas",
+        "texto": "Aquí hay obsidiana verde dorada que se extrae desde tiempos prehispánicos: llegó a Teotihuacan, Tula y Tenochtitlan para hacer navajas y puntas.",
+        "enlace": "vista=-98.5535,20.0858,10,58,-15&mapa=satelite&nubes=no",
+        "luz": "mediodia",
+        "marca": "Cerro de las Navajas"
+      },
+      {
+        "titulo": "Prismas Basálticos",
+        "texto": "Columnas de basalto de unos 2.6 millones de años en Santa María Regla. Humboldt las dibujó en 1803; se consideran de las más largas que se conocen.",
+        "enlace": "vista=-98.5634,20.2345,7,62,20&mapa=satelite&nubes=no",
+        "luz": "mediodia",
+        "marca": "Prismas Basálticos"
+      },
+      {
+        "titulo": "Real del Monte",
+        "texto": "La mina de Acosta, el Panteón Inglés y el Museo del Paste recuerdan a los mineros de Cornualles que llegaron en 1825 con máquinas de vapor para sacar el agua de las minas.",
+        "enlace": "vista=-98.6715,20.1405,10,60,20&mapa=satelite&nubes=no",
+        "luz": "tarde",
+        "marca": "Real del Monte"
+      }
+    ]
+  }
+]

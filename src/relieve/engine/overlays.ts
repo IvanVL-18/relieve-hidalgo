@@ -242,6 +242,12 @@ export class Overlays {
 
   constructor(private model: THREE.Group, private hf: Heightfield, private pixelRatio: number, private sf: SurfaceShaders, private onChange: () => void) {}
 
+  /** px del lienzo por px de la interfaz para los círculos (la densidad de la pantalla, o la escala de una grabación) */
+  setPixelRatio(v: number) {
+    this.pixelRatio = v;
+    for (const L of this.points) L.setScale(v);
+  }
+
   addPoints(spec: PointsSpec): PointsHandle {
     const layer = new PointsLayer(spec, this.hf, this.pixelRatio, this.sf, this.onChange, () => { this.points.delete(layer); this.onChange(); });
     this.points.add(layer);
@@ -435,6 +441,12 @@ class PointsLayer implements PointsHandle {
   }
 
   setVisible(v: boolean) { this.object.visible = v; this.changed(); }
+
+  /** px del lienzo por px de la interfaz (tamaño de los círculos) */
+  setScale(v: number) {
+    const u = (this.mat as THREE.ShaderMaterial).uniforms?.uScale;
+    if (u) u.value = v;
+  }
 
   dispose() {
     this.object.removeFromParent();

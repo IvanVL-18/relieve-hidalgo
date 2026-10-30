@@ -7,4 +7,4 @@ export type { LiveCloudsStatus } from './shared/goes';
 export { decodeViewState, encodeViewState, viewStateUrl } from './shared/enlaces';
 export type { View, ViewState } from './shared/enlaces';
 export { ANALYSES } from './analyses/registry';
-export type { AnalysisContext, AnalysisDef, AnalysisProps } from './analyses/types';
+export type { AnalysisContext, AnalysisDef, AnalysisProps, SceneApi, SceneSettings, ViewerMode } from './analyses/types';

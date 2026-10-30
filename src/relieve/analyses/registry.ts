@@ -78,12 +78,40 @@ export const ANALYSES: AnalysisDef[] = [
     fuentes: ['INEGI, Censo de Población y Vivienda 2020, muestra (cuestionario ampliado)', 'Lugares fuera de Hidalgo: INEGI, Catálogo Único de Claves Geoestadísticas (servicio web)'],
     load: () => import('./movilidad/Movilidad'),
   },
-  { id: 'recorridos', titulo: 'Recorridos guiados', grupo: 'Difusión', resumen: 'Vuelos narrados por las regiones del estado.' },
-  { id: 'geoparque', titulo: 'Geoparque y Pueblos Mágicos', grupo: 'Difusión', resumen: 'Geositios de la Comarca Minera (UNESCO) y pueblos en 3D.' },
-  { id: 'video', titulo: 'Exportar video', grupo: 'Difusión', resumen: 'Grabar un vuelo para redes sociales.' },
-  { id: 'impresion', titulo: 'Impresión 3D', grupo: 'Difusión', resumen: 'Modelo STL para maquetas y mapas táctiles.' },
-  { id: 'escuelas', titulo: 'Modo escuelas', grupo: 'Difusión', resumen: 'Regiones, ríos y climas explicados.' },
+  {
+    id: 'recorridos', titulo: 'Recorridos guiados', grupo: 'Difusión',
+    resumen: 'Vuelos narrados por el estado: de la Huasteca a la Comarca Minera, el camino del agua y el Geoparque. Con voz y en bucle para ferias.',
+    fuentes: ['Población: INEGI, Censo 2020', 'Relieve: INEGI, Continental relief 2016', 'Geositios: Canet et al. (2017), Terra Digitalis, UNAM', 'Lluvia: INEGI'],
+    load: () => import('./recorridos/Recorridos'),
+  },
+  {
+    id: 'geoparque', titulo: 'Geoparque y Pueblos Mágicos', grupo: 'Difusión',
+    resumen: 'Los 31 geositios del Geoparque Mundial de la UNESCO Comarca Minera y los 9 Pueblos Mágicos, con foto, historia y vuelo a cada uno.',
+    fuentes: ['Geositios: Canet et al. (2017), Terra Digitalis, UNAM (Geoparque Comarca Minera)', 'Pueblos Mágicos: Secretaría de Turismo', 'Fotos: Wikimedia Commons (autor y licencia en cada ficha)'],
+    load: () => import('./geoparque/Geoparque'),
+  },
+  {
+    id: 'video', titulo: 'Video e imagen grande', grupo: 'Difusión',
+    resumen: 'Graba en MP4 una vuelta, un acercamiento o un recorrido (horizontal, vertical o cuadrado), o descarga la vista en 4K u 8K.',
+    fuentes: ['Las del mapa que se graba: relieve INEGI y USGS, OpenStreetMap, INEGI y el mapa base (van en el video)'],
+    load: () => import('./video/Video'),
+  },
+  {
+    id: 'impresion', titulo: 'Impresión 3D', grupo: 'Difusión',
+    resumen: 'Descarga el relieve del estado, de un municipio o de un rectángulo como modelo STL para imprimir maquetas y mapas táctiles.',
+    fuentes: ['Relieve: INEGI, Continental relief 2016 (30 y 90 m), vía Terrain Tiles', 'Ríos: drenaje calculado del relieve (90 m)', 'Municipios: INEGI, Marco Geoestadístico 2022', 'Localidades: INEGI, Censo 2020 (ITER)'],
+    load: () => import('./impresion/Impresion'),
+  },
+  {
+    id: 'escuelas', titulo: 'Hidalgo para escuelas', grupo: 'Difusión',
+    resumen: 'Las 10 regiones, el relieve, los climas y el camino del agua explicados con sencillez, con preguntas para clase. También con ?escuelas.',
+    fuentes: ['Regiones geoculturales: Secretaría de Cultura del Estado de Hidalgo (mapa, 2019)', 'Climas, provincias fisiográficas y topoformas: INEGI 1:1 000 000 (vía IDEFOR, CONAFOR)', 'Población: INEGI, Censo 2020', 'Camino del agua: relieve de INEGI (90 m) y ríos de © OpenStreetMap'],
+    load: () => import('./escuelas/Escuelas'),
+  },
   { id: 'preguntas', titulo: 'Preguntas en lenguaje natural', grupo: 'Plataforma', resumen: '«Municipios arriba de 2 500 m con más de 30 % de pobreza».' },
 ];
 
 export const GROUP_ORDER: AnalysisGroup[] = ['Población', 'Desigualdad', 'Servicios', 'Agua y riesgo', 'Planeación', 'Difusión', 'Plataforma'];
+
+/** Menú del modo escuelas: temas para clase y los análisis más sencillos de explicar. */
+export const SCHOOL_ANALYSES = ['escuelas', 'recorridos', 'geoparque', 'poblacion', 'cuencas', 'perfil', 'solar', 'impresion'];

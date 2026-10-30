@@ -19,6 +19,29 @@ export const VIEW_RAMP = ['#1e8f86', '#3fbfb2', '#8fe6dc'];
 export const NOVIEW = '#d95926';
 /** radiación solar anual: oscuro = poca, claro = mucha (dorado) */
 export const SUN_RAMP = ['#5c4813', '#86691a', '#b18b1f', '#dcae24', '#f5cf5a', '#fde79c'];
+/**
+ * geositios por interés (validada en todos los pares contra #0e121a); los Pueblos Mágicos van en columnas doradas, que
+ * se distinguen además por la forma
+ */
+export const GEO_COLORS = { cultura: '#3987e5', geologia: '#d95926', biota: '#199e70' } as const;
+export const PUEBLO_COLOR = '#ffcf7a';
+/**
+ * modo escuelas: climas con la convención de los mapas de clima (verdes = cálidos y húmedos, azules = templados y fríos,
+ * ocres y rojizos = secos); son muchas clases: el nombre se lee en la leyenda y bajo el cursor
+ */
+export const CLIMA_COLORS: Record<string, string> = {
+  'Cálido húmedo': '#1f7a3f', 'Cálido subhúmedo': '#79b04a', 'Semicálido húmedo': '#2ea58f', 'Semicálido subhúmedo': '#8fcf9a',
+  'Templado húmedo': '#2f6fb3', 'Templado subhúmedo': '#78a9d8', 'Semifrío subhúmedo': '#a99be0', 'Frío': '#e7e3f7',
+  'Semiseco cálido': '#c98f3c', 'Semiseco semicálido': '#ddb25b', 'Semiseco templado': '#e9d28e', 'Seco semicálido': '#b4532f', 'Seco templado': '#d47a52',
+};
+export const PROVINCIA_COLORS: Record<string, string> = {
+  'Sierra Madre Oriental': '#a8733f', 'Eje Neovolcánico': '#c2504a', 'Llanura Costera del Golfo Norte': '#5f9e4a', 'Mesa del Centro': '#d8b25e',
+};
+export const TOPOFORMA_COLORS: Record<string, string> = {
+  Sierra: '#8e5b3a', Lomerío: '#c9a26a', Meseta: '#9b7fd1', Valle: '#5fb3a3', Llanura: '#a9cf73', Cañón: '#d9573f', 'Cuerpo de agua': '#4f9fde',
+};
+/** regiones geoculturales: 5 colores repartidos para que las vecinas no se parezcan (el nombre va en la leyenda y el cursor) */
+export const REGION_COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500', '#9085e9'];
 /** radiación comparada con lo plano: azul = menos (laderas al norte), gris = igual, naranja = más (laderas al sur) */
 export const SUN_DIVERGING = ['#86b6ef', '#3987e5', '#1c5cab', '#383835', '#b5651d', '#e8913a', '#f5c27a'];
 

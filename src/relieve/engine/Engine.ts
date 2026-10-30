@@ -17,7 +17,7 @@ import {
   makeSharedUniforms, makeTerrainUniforms, type SharedUniforms, type TerrainUniforms,
 } from './materials';
 import { BASE_MAPS, loadBaseMap, type BaseMapId, type LoadedBaseMap } from './basemaps';
-import type { CompareHandle, CompareSpec, GridImage, MapApi, MapHit } from './mapApi';
+import type { CameraPath, CaptureFrame, CaptureOptions, CaptureSession, CompareHandle, CompareSpec, GridImage, MapApi, MapHit } from './mapApi';
 import { Minimap } from './minimap';
 import { Overlays } from './overlays';
 import { Curtain, Rasters, makePalette, type RasterHandle } from './rasters';
@@ -152,7 +152,13 @@ function skyAt(elDeg: number) {
   return { haze: lerp(h0, h1), glow: lerp(g0, g1) };
 }
 
-interface Fly { t0: number; ms: number; fromT: THREE.Vector3; toT: THREE.Vector3; fromS: THREE.Spherical; toS: THREE.Spherical }
+interface Fly { t0: number; ms: number; fromT: THREE.Vector3; toT: THREE.Vector3; fromS: THREE.Spherical; toS: THREE.Spherical; done?: (ok: boolean) => void }
+/** cámara guiada por un análisis: fn(ms) da la vista de cada cuadro */
+interface Path { t0: number; fn: (ms: number) => View | null; end: (why: 'end' | 'user' | 'stop') => void }
+/** teselas que se piden antes de volar a una vista */
+interface Prefetch { camE: THREE.Vector3; frustum: THREE.Frustum; t0: number; tiles: [TileSet<unknown>, number][] | null; resolve: () => void }
+/** grabación: tamaño, mosaico (si pasa del máximo de la GPU), escala de la interfaz y reloj propio (ms) */
+interface Capture { w: number; h: number; tw: number; th: number; nx: number; ny: number; scale: number; clock: number; out: HTMLCanvasElement | null }
 
 export class ReliefEngine {
   readonly meta = meta;
@@ -222,6 +228,9 @@ export class ReliefEngine {
   private hour: number;
   private ymd = todayInMexico();
   private fly: Fly | null = null;
+  private path: Path | null = null;
+  private prefetches: Prefetch[] = [];
+  private cap: Capture | null = null;
   private home = { target: new THREE.Vector3(0, -0.03, 0.05), pos: new THREE.Vector3(0.15, 1.75, 2.55) };
 
   // bucle
@@ -337,7 +346,7 @@ export class ReliefEngine {
     c.autoRotateSpeed = 0.3;
     c.target.copy(this.home.target);
     this.camera.position.copy(this.home.pos);
-    c.addEventListener('start', () => { c.autoRotate = false; this.fly = null; this.touch(); });
+    c.addEventListener('start', () => { c.autoRotate = false; this.stopFly(false); this.endPath('user'); this.touch(); });
     c.addEventListener('change', () => this.wake());
 
     const g = this.geo;
@@ -660,7 +669,7 @@ export class ReliefEngine {
     tu.uDetailSize.value.set(m.w, m.h);
     tu.uDetailEnc.value.set(half ? 1 : 2, half ? 0 : -1);
     this.disposables.push(hTex, rt);
-    this.detailAnim = performance.now();
+    this.detailAnim = this.now();
     this.timings.detail = m.ms + Math.round(performance.now() - t);
     this.lodEx = -1;
     this.wake();
@@ -741,7 +750,7 @@ export class ReliefEngine {
       this.tiles30 = { nx: dem.nx, ny: dem.ny, cells: dem.tileCells, f: dem.f, px: S, data: new Map() };
       hf.setTiles(this.tiles30);
       this.demTiles = new TileSet<Uint16Array>({
-        info: dem, slotPx: S, slots: DEM_SLOTS, atlas, pages, pageRow: 0, concurrency: 6,
+        info: dem, slotPx: S, slots: DEM_SLOTS, atlas, pages, pageRow: 0, concurrency: 6, now: () => this.now(),
         load: i => svc.tile('dem', i),
         upload: (data, x, y) => {
           const src = new THREE.DataTexture(data, S, S, THREE.RGIntegerFormat, THREE.UnsignedShortType);
@@ -768,7 +777,7 @@ export class ReliefEngine {
       tu.uSatSlot.value = S;
       tu.uSatAtlasSize.value.set(size, size);
       this.satTiles = new TileSet<ImageBitmap>({
-        info: sat, slotPx: S, slots: SAT_SLOTS, atlas, pages, pageRow: dem?.ny ?? 0, concurrency: 6,
+        info: sat, slotPx: S, slots: SAT_SLOTS, atlas, pages, pageRow: dem?.ny ?? 0, concurrency: 6, now: () => this.now(),
         load: i => svc.tile('sat', i),
         upload: (bmp, x, y) => {
           const src = new THREE.Texture(bmp);
@@ -795,26 +804,43 @@ export class ReliefEngine {
     const satShown = this.base.id === 'satelite' || this.cmp?.base === 'satelite';
     if (this.satTiles) sets.push([this.satTiles, satShown ? 45 : 0]);
     const F = { x0: this.geo.xMin, z0: this.geo.zMin, sx: meta.step * this.geo.KX, sz: meta.step * this.geo.KZ };
-    const ex = this.ex, camE = this.camE, box = this.tileBox;
-    for (const [set, maxKm] of sets) {
-      const { nx, ny, tileCells: T, has } = set.info, want = new Map<number, number>();
-      if (maxKm > 0) {
-        for (let ty = 0; ty < ny; ty++) for (let tx = 0; tx < nx; tx++) {
-          const i = ty * nx + tx;
-          if (!has[i]) continue;
-          const [lo, hi] = lod.bounds(T, tx, ty);
-          const x0 = F.x0 + tx * T * F.sx, x1 = x0 + T * F.sx, z0 = F.z0 + ty * T * F.sz, z1 = z0 + T * F.sz;
-          const y0 = ((lo - 400) / 1000) * ex, y1 = ((hi + 400) / 1000) * ex;
-          const d = Math.hypot(Math.max(x0 - camE.x, 0, camE.x - x1), Math.max(y0 - camE.y, 0, camE.y - y1), Math.max(z0 - camE.z, 0, camE.z - z1));
-          if (d > maxKm) continue;
-          box.min.set(x0 * UNIT, y0 * UNIT, z0 * UNIT);
-          box.max.set(x1 * UNIT, y1 * UNIT, z1 * UNIT);
-          if (d > 6 && !this.frustum.intersectsBox(box)) continue;
-          want.set(i, d);
-        }
+    const ex = this.ex, box = this.tileBox;
+    // teselas a ≤ maxKm de una cámara (camE en km, y exagerada) y a la vista; prioridad = distancia + extra
+    const add = (set: TileSet<unknown>, maxKm: number, camE: THREE.Vector3, frustum: THREE.Frustum, extra: number, want: Map<number, number>, list?: [TileSet<unknown>, number][]) => {
+      const { nx, ny, tileCells: T, has } = set.info;
+      for (let ty = 0; ty < ny; ty++) for (let tx = 0; tx < nx; tx++) {
+        const i = ty * nx + tx;
+        if (!has[i]) continue;
+        const [lo, hi] = lod.bounds(T, tx, ty);
+        const x0 = F.x0 + tx * T * F.sx, x1 = x0 + T * F.sx, z0 = F.z0 + ty * T * F.sz, z1 = z0 + T * F.sz;
+        const y0 = ((lo - 400) / 1000) * ex, y1 = ((hi + 400) / 1000) * ex;
+        const d = Math.hypot(Math.max(x0 - camE.x, 0, camE.x - x1), Math.max(y0 - camE.y, 0, camE.y - y1), Math.max(z0 - camE.z, 0, camE.z - z1));
+        if (d > maxKm) continue;
+        box.min.set(x0 * UNIT, y0 * UNIT, z0 * UNIT);
+        box.max.set(x1 * UNIT, y1 * UNIT, z1 * UNIT);
+        if (d > 6 && !frustum.intersectsBox(box)) continue;
+        if (!want.has(i)) want.set(i, d + extra);
+        list?.push([set, i]);
       }
-      (set as TileSet<unknown>).update(want, now);
+    };
+    // (la lista de teselas de una precarga se arma la primera vez que se calcula)
+    const fresh = new Set(this.prefetches.filter(p => !p.tiles));
+    for (const p of fresh) p.tiles = [];
+    for (const [s, maxKm] of sets) {
+      const set = s as TileSet<unknown>, want = new Map<number, number>();
+      if (maxKm > 0) {
+        add(set, maxKm, this.camE, this.frustum, 0, want);
+        // las de las vistas que se precargan, después de las de la vista actual
+        for (const p of this.prefetches) add(set, maxKm, p.camE, p.frustum, 500, want, fresh.has(p) ? p.tiles! : undefined);
+      }
+      set.update(want, now);
     }
+    // precargas terminadas: todas sus teselas llegaron (o fallaron) o pasaron 20 s
+    this.prefetches = this.prefetches.filter(p => {
+      const ok = p.tiles!.every(([set, i]) => set.ready(i)) || performance.now() - p.t0 > 20000;
+      if (ok) p.resolve();
+      return !ok;
+    });
   }
 
   /** Elige los parches del relieve para la cámara actual. */
@@ -923,16 +949,20 @@ export class ReliefEngine {
     if (!tu) return Promise.resolve();
     const req = ++this.baseReq;
     const fadeTo = (to: number, then?: () => void) => {
-      this.baseAnim = { from: tu.uBaseTex.value, to, t0: performance.now(), then };
+      this.baseAnim = { from: tu.uBaseTex.value, to, t0: this.now(), then };
       this.wake();
     };
     if (id === 'altitud') { fadeTo(0, () => { this.base = { id, map: null }; this.applyBaseSlots(); }); return Promise.resolve(); }
-    return this.loadBase(id).then(map => {
+    const p = this.loadBase(id).then(map => {
       if (req !== this.baseReq || this.disposed) return;
       const swap = () => { this.base = { id, map }; this.applyBaseSlots(); fadeTo(1); };
       if (tu.uBaseTex.value > 0.01 && this.base.map !== map) fadeTo(0, swap); else swap();
     });
+    // (una grabación espera a que llegue la imagen del mapa base)
+    const wait = (this.baseWait = p.catch(() => undefined).finally(() => { if (this.baseWait === wait) this.baseWait = null; }));
+    return p;
   }
+  private baseWait: Promise<void> | null = null;
   get baseMapCredit() { return BASE_MAPS.find(b => b.id === this.base.id)?.credit ?? ''; }
   setAutoRotate(on: boolean) { this.controls.autoRotate = on && !this.reduceMotion; this.wake(); }
   zoomBy(f: number) {
@@ -983,13 +1013,156 @@ export class ReliefEngine {
     const t = this.v2.copy(this.controls.target).applyMatrix4(this.inv.copy(this.model.matrixWorld).invert()), s = this.curSph();
     return { lon: this.geo.lonOfX(t.x), lat: this.geo.latOfZ(t.z), dist: s.radius, polar: (s.phi * 180) / Math.PI, az: (s.theta * 180) / Math.PI };
   }
-  /** Lleva la cámara a una vista (ms = 0: sin animación). */
-  setView(v: View, ms = 1200) {
-    if (!this.hf) return;
-    this.flyTo(this.worldOf(v.lon, v.lat), {
+  /** Lleva la cámara a una vista (ms = 0: sin animación); true al llegar, false si algo la interrumpió. */
+  setView(v: View, ms = 1200): Promise<boolean> {
+    if (!this.hf) return Promise.resolve(false);
+    return new Promise(done => this.flyTo(this.targetOf(v.lon, v.lat), {
       dist: clamp(v.dist, this.controls.minDistance, this.controls.maxDistance),
-      polar: clamp((v.polar * Math.PI) / 180, 0.001, this.controls.maxPolarAngle), azimuth: (v.az * Math.PI) / 180, ms: Math.max(1, ms),
+      polar: clamp((v.polar * Math.PI) / 180, 0.001, this.controls.maxPolarAngle), azimuth: (v.az * Math.PI) / 180, ms: Math.max(1, ms), done,
+    }));
+  }
+
+  /**
+   * Cámara guiada: en cada cuadro pone la vista fn(ms desde el inicio, con el reloj del motor) hasta que fn devuelve
+   * null. La detiene el usuario al tomar la cámara, otro vuelo o stop().
+   */
+  followPath(fn: (ms: number) => View | null): CameraPath {
+    this.endPath('stop');
+    this.stopFly(false);
+    this.controls.autoRotate = false;
+    let end!: (why: 'end' | 'user' | 'stop') => void;
+    const done = new Promise<'end' | 'user' | 'stop'>(r => { end = r; });
+    const path: Path = { t0: this.now(), fn, end: why => { if (this.path === path) this.path = null; end(why); } };
+    this.path = path;
+    this.touch();
+    this.wake();
+    return { stop: () => path.end('stop'), done };
+  }
+  private endPath(why: 'end' | 'user' | 'stop') { this.path?.end(why); }
+
+  /** Pide las teselas de detalle de una vista antes de ir a ella; se resuelve cuando llegaron (o a los 20 s). */
+  prefetch(v: View): Promise<void> {
+    if (!this.hf || !this.lod || (!this.demTiles && !this.satTiles)) return Promise.resolve();
+    const cam = this.camera.clone(), t = this.targetOf(v.lon, v.lat);
+    const s = new THREE.Spherical(clamp(v.dist, this.controls.minDistance, this.controls.maxDistance), clamp((v.polar * Math.PI) / 180, 0.001, this.controls.maxPolarAngle), (v.az * Math.PI) / 180);
+    cam.position.copy(t).add(new THREE.Vector3().setFromSpherical(s));
+    cam.lookAt(t);
+    cam.updateMatrixWorld();
+    const l = cam.position.clone().applyMatrix4(this.inv.copy(this.model.matrixWorld).invert());
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    return new Promise(resolve => {
+      const job: Prefetch = { camE: new THREE.Vector3(l.x, l.y * this.ex, l.z), frustum, t0: performance.now(), tiles: null, resolve: () => { clearTimeout(timer); resolve(); } };
+      const timer = setTimeout(() => { this.prefetches = this.prefetches.filter(p => p !== job); resolve(); }, 20000);
+      this.prefetches.push(job);
+      this.tileDirty = true;
+      this.wake();
     });
+  }
+
+  /**
+   * Grabación cuadro por cuadro a tamaño fijo: detiene el bucle propio, la resolución adaptable y la interacción; cada
+   * frame() avanza el reloj del motor, espera las teselas de la vista y dibuja (en mosaico si el tamaño pasa del máximo
+   * de la GPU).
+   */
+  capture(o: CaptureOptions): CaptureSession {
+    if (this.cap) throw new Error('Ya hay una grabación en curso');
+    if (!this.ready) throw new Error('El relieve aún no está listo');
+    const gl = this.renderer.getContext(), vp = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array;
+    const lim = Math.min(4096, gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number, vp[0], vp[1]);
+    const w = Math.max(16, Math.round(o.width)), h = Math.max(16, Math.round(o.height)), nx = Math.ceil(w / lim), ny = Math.ceil(h / lim);
+    const cap: Capture = { w, h, nx, ny, tw: Math.ceil(w / nx), th: Math.ceil(h / ny), scale: o.scale ?? h / 720, clock: performance.now(), out: null };
+    if (nx * ny > 1) { cap.out = document.createElement('canvas'); cap.out.width = w; cap.out.height = h; }
+    cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    this.running = false;
+    this.cap = cap;
+    this.controls.enabled = false;
+    this.el.root.classList.add('rh-capturing');
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    this.pointer.in = false;
+    this.probe.visible = false;
+    if (this.tu) { this.tu.uHover.value = 0; this.tu.uLinePx.value = cap.scale; }
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(cap.tw, cap.th, false);
+    this.camera.aspect = w / h;
+    this.camera.fov = this.camera.aspect < 0.8 ? 46 : 32;
+    this.camera.updateProjectionMatrix();
+    this.overlays?.resolution.set(cap.tw / cap.scale, cap.th / cap.scale);
+    this.overlays?.setPixelRatio(cap.scale);
+    const night = this.prep?.night.material as THREE.ShaderMaterial | undefined;
+    if (night) night.uniforms.uScale.value = cap.scale;
+    this.clouds?.setSize(cap.tw, cap.th, 1);
+    this.last = cap.clock;
+    this.lodEx = -1;
+    this.tileDirty = this.renderDirty = true;
+    return { frame: (dt, draw, opts) => this.captureFrame(cap, dt, draw, opts), end: () => this.endCapture(cap) };
+  }
+
+  private async captureFrame(cap: Capture, dt: number, draw: (f: CaptureFrame) => void, opts: { maxWaitMs?: number; still?: boolean } = {}) {
+    if (this.cap !== cap) throw new Error('La grabación ya terminó');
+    cap.clock += Math.max(0, dt) * 1000;
+    this.update(cap.clock);
+    // teselas de esta vista y mapa base: se espera a que lleguen (hasta maxWaitMs)
+    const t0 = performance.now(), maxWait = opts.maxWaitMs ?? 8000;
+    for (;;) {
+      this.updateLod();
+      this.updateTiles(cap.clock);
+      const settled = (this.demTiles?.settled ?? true) && (this.satTiles?.settled ?? true) && !this.baseAnim && !this.baseWait;
+      if (settled || performance.now() - t0 > maxWait) break;
+      await new Promise(r => setTimeout(r, 40));
+      if (this.cap !== cap || this.disposed) return;
+    }
+    // fotos: los fundidos de las teselas y del mapa base terminan antes de dibujar
+    if (opts.still) { cap.clock += 1500; this.update(cap.clock); this.updateLod(); }
+    if (this.demTiles?.animate(cap.clock)) this.lodEx = -1;
+    this.satTiles?.animate(cap.clock);
+    const cam = this.camera, model = this.model, dist = this.curDist();
+    // etiquetas para el tamaño de la grabación (en px de la interfaz; luego × escala)
+    const placed: { text: string; sub?: string; kind: CaptureFrame['labels'][number]['kind']; x: number; y: number }[] = [];
+    this.labels?.layout(cam, model.matrixWorld, dist, this.layers, cap.w / cap.scale, cap.h / cap.scale, placed);
+    const pinOut = this.labels?.pinOut ?? null;
+    const frame: CaptureFrame = {
+      canvas: cap.out ?? this.renderer.domElement, width: cap.w, height: cap.h, scale: cap.scale,
+      labels: placed.map(p => ({ ...p, x: p.x * cap.scale, y: p.y * cap.scale })),
+      pin: pinOut && { text: pinOut.text, x: pinOut.x * cap.scale, y: pinOut.y * cap.scale },
+      glow: `rgb(${skyAt(this.sunElevDeg).glow.map(v => Math.round(v * 255)).join(',')})`,
+    };
+    if (!cap.out) { this.draw(false); draw(frame); return; }
+    // mosaico: cada pedazo con su parte del cuadro de la cámara
+    const ctx = cap.out.getContext('2d')!;
+    ctx.clearRect(0, 0, cap.w, cap.h);
+    for (let j = 0; j < cap.ny; j++) for (let i = 0; i < cap.nx; i++) {
+      const x = i * cap.tw, y = j * cap.th, tw = Math.min(cap.tw, cap.w - x), th = Math.min(cap.th, cap.h - y);
+      cam.setViewOffset(cap.w, cap.h, x, y, tw, th);
+      this.renderer.setSize(tw, th, false);
+      this.overlays?.resolution.set(tw / cap.scale, th / cap.scale);
+      this.clouds?.setSize(tw, th, 1);
+      this.draw(false);
+      ctx.drawImage(this.renderer.domElement, 0, 0, tw, th, x, y, tw, th);
+    }
+    cam.clearViewOffset();
+    draw(frame);
+  }
+
+  private endCapture(cap: Capture) {
+    if (this.cap !== cap) return;
+    this.cap = null;
+    this.controls.enabled = true;
+    this.el.root.classList.remove('rh-capturing');
+    this.camera.clearViewOffset();
+    if (this.tu) this.tu.uLinePx.value = 1;
+    this.dpr = this.fullDpr;
+    this.renderer.setPixelRatio(this.dpr);
+    this.overlays?.setPixelRatio(this.fullDpr);
+    const night = this.prep?.night.material as THREE.ShaderMaterial | undefined;
+    if (night) night.uniforms.uScale.value = this.fullDpr;
+    // el camino o el vuelo que quedó a medias se detiene donde está (sus relojes eran los de la grabación)
+    this.endPath('stop');
+    this.stopFly(false);
+    this.last = performance.now();
+    this.resize();
+    this.labelsDirty = this.miniDirty = this.tileDirty = true;
+    this.invalidate();
   }
 
   /** Vuela a un resultado del buscador, lo marca y selecciona su municipio. */
@@ -1098,7 +1271,8 @@ export class ReliefEngine {
    */
   createScope(): MapApi {
     const handles = new Set<{ dispose(): void }>(), offs: (() => void)[] = [];
-    let fill = false, overlay = false, pin = false, alive = true;
+    let fill = false, overlay = false, pin = false, alive = true, hidesClouds = true;
+    let path: CameraPath | null = null, session: CaptureSession | null = null;
     const track = <T extends { dispose(): void }>(h: T): T => {
       handles.add(h);
       const d = h.dispose.bind(h);
@@ -1122,6 +1296,22 @@ export class ReliefEngine {
       addRaster: spec => track(rs().add(spec)),
       compare: spec => track(this.compare(spec)),
       flyTo: (lon, lat, km) => this.flyToLonLat(lon, lat, km),
+      getView: () => this.getView(),
+      setView: (v, ms) => this.setView(v, ms),
+      followPath: fn => (path = this.followPath(fn)),
+      prefetch: v => this.prefetch(v),
+      showClouds: on => {
+        if (on !== hidesClouds) return;
+        hidesClouds = !on;
+        this.scopes += on ? -1 : 1;
+        this.clouds?.setSuppressed(this.scopes > 0);
+        this.invalidate();
+      },
+      capture: o => {
+        const s = this.capture(o);
+        session = s;
+        return { frame: (dt, draw, opts) => s.frame(dt, draw, opts), end: () => { if (session === s) session = null; s.end(); } };
+      },
       select: (m, fly) => this.select(m, fly),
       highlight: m => { if (this.tu) { this.tu.uSel.value = m; this.invalidate(); } },
       municipioGrid: () => this.hf?.muni ?? new Uint8Array(meta.W * meta.H),
@@ -1136,7 +1326,10 @@ export class ReliefEngine {
         if (fill) this.setMunicipioColors(null);
         if (overlay) this.setOverlay(null);
         if (pin) this.labels?.setPin(null);
-        this.clouds?.setSuppressed(--this.scopes > 0);
+        session?.end();
+        path?.stop();
+        if (hidesClouds) this.scopes--;
+        this.clouds?.setSuppressed(this.scopes > 0);
         this.pointer.dirty = true;
         this.invalidate();
       },
@@ -1260,20 +1453,35 @@ export class ReliefEngine {
   private worldOf(lon: number, lat: number, liftKm = 0) {
     return new THREE.Vector3(this.geo.toX(lon), this.hf!.surfaceLL(lat, lon) / 1000 + liftKm, this.geo.toZ(lat)).applyMatrix4(this.model.matrixWorld);
   }
+  /** Punto que mira la cámara para lon/lat: sobre el relieve en Hidalgo y a 1 500 m fuera (como lo deja el bucle). */
+  private targetOf(lon: number, lat: number) {
+    const hf = this.hf!, y = (hf.muniLL(lat, lon) ? hf.surfaceLL(lat, lon) : 1500) / 1000;
+    return new THREE.Vector3(this.geo.toX(lon), y, this.geo.toZ(lat)).applyMatrix4(this.model.matrixWorld);
+  }
   private curDist() { return this.camera.position.distanceTo(this.controls.target); }
   private curSph() { return new THREE.Spherical().setFromVector3(this.v1.copy(this.camera.position).sub(this.controls.target)); }
+  /** reloj de las animaciones (ms): el real o, al grabar, el de la grabación */
+  private now() { return this.cap ? this.cap.clock : performance.now(); }
 
-  private flyTo(target: THREE.Vector3, { dist, polar, azimuth, ms = 1300 }: { dist?: number; polar?: number; azimuth?: number; ms?: number } = {}) {
+  private flyTo(target: THREE.Vector3, { dist, polar, azimuth, ms = 1300, done }: { dist?: number; polar?: number; azimuth?: number; ms?: number; done?: (ok: boolean) => void } = {}) {
     this.controls.autoRotate = false;
+    this.endPath('stop');
+    this.stopFly(false);
     const from = this.curSph();
     const toS = new THREE.Spherical(dist ?? from.radius, polar ?? from.phi, azimuth ?? from.theta);
     let dth = toS.theta - from.theta;
     while (dth > Math.PI) dth -= 2 * Math.PI;
     while (dth < -Math.PI) dth += 2 * Math.PI;
     toS.theta = from.theta + dth;
-    this.fly = { t0: performance.now(), ms: this.reduceMotion ? 1 : ms, fromT: this.controls.target.clone(), toT: target.clone(), fromS: from, toS };
+    this.fly = { t0: this.now(), ms: this.reduceMotion ? 1 : ms, fromT: this.controls.target.clone(), toT: target.clone(), fromS: from, toS, done };
     this.touch();
     this.wake();
+  }
+  /** termina el vuelo en curso; ok = llegó */
+  private stopFly(ok: boolean) {
+    const f = this.fly;
+    this.fly = null;
+    f?.done?.(ok);
   }
 
   private stepFly(now: number) {
@@ -1285,10 +1493,20 @@ export class ReliefEngine {
     const r = f.fromS.radius + (f.toS.radius - f.fromS.radius) * e + Math.sin(Math.PI * e) * Math.min(1.2, travel * 0.8);
     this.sph.set(r, f.fromS.phi + (f.toS.phi - f.fromS.phi) * e, f.fromS.theta + (f.toS.theta - f.fromS.theta) * e);
     this.camera.position.copy(this.controls.target).add(this.v1.setFromSpherical(this.sph));
-    if (p >= 1) this.fly = null;
+    if (p >= 1) this.stopFly(true);
   }
 
-  private moveBy(v: THREE.Vector3) { this.fly = null; this.controls.target.add(v); this.camera.position.add(v); this.wake(); }
+  /** Cámara guiada: pone la vista que pide el camino para este instante. */
+  private stepPath(now: number) {
+    const p = this.path!, v = p.fn(Math.max(0, now - p.t0));
+    if (!v) { p.end('end'); return; }
+    const c = this.controls, t = this.targetOf(v.lon, v.lat);
+    c.target.copy(t);
+    this.sph.set(clamp(v.dist, c.minDistance, c.maxDistance), clamp((v.polar * Math.PI) / 180, 0.001, c.maxPolarAngle), (v.az * Math.PI) / 180);
+    this.camera.position.copy(t).add(this.v1.setFromSpherical(this.sph));
+  }
+
+  private moveBy(v: THREE.Vector3) { this.stopFly(false); this.endPath('user'); this.controls.target.add(v); this.camera.position.add(v); this.wake(); }
 
   /* ================= entrada ================= */
   private toNdc(cx: number, cy: number) {
@@ -1407,7 +1625,8 @@ export class ReliefEngine {
 
   private resize() {
     const w = this.el.stage.clientWidth, h = this.el.stage.clientHeight;
-    if (!w || !h) return;
+    // (al grabar, el lienzo tiene el tamaño de la grabación; se ajusta al terminar)
+    if (!w || !h || this.cap) return;
     this.renderer.setSize(w, h, false);
     this.overlays?.resolution.set(w, h);
     this.clouds?.setSize(w, h);
@@ -1535,8 +1754,20 @@ export class ReliefEngine {
 
   private frame = (now: number) => {
     this.raf = 0;
-    if (this.disposed || !this.visible) { this.running = false; return; }
-    const dt = Math.min(0.05, (now - this.last) / 1000);
+    if (this.disposed || !this.visible || this.cap) { this.running = false; return; }
+    const { moving, render, keep } = this.update(now);
+    if (render) this.draw(moving);
+    if (keep) this.raf = requestAnimationFrame(this.frame);
+    else this.running = false;
+  };
+
+  /**
+   * Un paso del bucle: animaciones, cámara, parches y teselas, cursor, etiquetas y minimapa. Al grabar (this.cap) no
+   * toca el HTML ni la resolución, y la grabación dibuja después de esperar las teselas.
+   */
+  private update(now: number) {
+    const cap = this.cap;
+    const dt = Math.min(0.05, Math.max(0, now - this.last) / 1000);
     this.last = now;
     this.frameN++;
     const c = this.controls, cam = this.camera, model = this.model, hf = this.hf!, g = this.geo;
@@ -1556,18 +1787,19 @@ export class ReliefEngine {
       active = true;
     }
     if (this.baseAnim && this.tu) {
-      const a = this.baseAnim, p = Math.min(1, (now - a.t0) / 450);
+      const a = this.baseAnim, p = Math.min(1, Math.max(0, now - a.t0) / 450);
       this.tu.uBaseTex.value = a.from + (a.to - a.from) * easeIO(p);
       if (p >= 1) { this.baseAnim = null; a.then?.(); }
       active = true;
     }
     if (this.detailAnim !== null && this.tu) {
-      const p = Math.min(1, (now - this.detailAnim) / 700);
+      const p = Math.min(1, Math.max(0, now - this.detailAnim) / 700);
       this.tu.uDetail.value = this.hu.uH1On.value = easeIO(p);
       if (p >= 1) this.detailAnim = null;
       active = true;
     }
     if (this.fly) { this.stepFly(now); active = true; }
+    if (this.path) { this.stepPath(now); active = true; }
 
     // el objetivo no sale del estado y va montado sobre el relieve
     const before = this.v2.copy(c.target);
@@ -1575,7 +1807,7 @@ export class ReliefEngine {
     c.target.z = clamp(c.target.z, g.zMin * UNIT, g.zMax * UNIT);
     const tlat = g.latOfZ(c.target.z / UNIT), tlon = g.lonOfX(c.target.x / UNIT);
     const surf = ((hf.muniLL(tlat, tlon) ? hf.surfaceLL(tlat, tlon) : 1500) / 1000) * UNIT * this.ex;
-    const dy = (surf - c.target.y) * (this.fly ? 1 : 1 - Math.exp(-dt * 4));
+    const dy = (surf - c.target.y) * (this.fly || this.path ? 1 : 1 - Math.exp(-dt * 4));
     if (Math.abs(dy) > 1e-6) { c.target.y += dy; active = true; }
     cam.position.add(this.v1.copy(c.target).sub(before));
     if (c.update(dt)) active = true;
@@ -1594,8 +1826,8 @@ export class ReliefEngine {
     if (moved) { this.lastCam.copy(cam.matrixWorld); this.labelsDirty = this.miniDirty = true; this.lastMove = now; this.viewMoved = true; }
     // parches del relieve para esta cámara
     if (moved || this.lodEx !== this.ex) this.updateLod();
-    // teselas de detalle: cada ~150 ms mientras se mueve y una vez al detenerse
-    if (this.tileDirty && (now - this.lastTiles > 150 || !(active || moved))) {
+    // teselas de detalle: cada ~150 ms mientras se mueve y una vez al detenerse (al grabar, en cada cuadro)
+    if (this.tileDirty && (cap || now - this.lastTiles > 150 || !(active || moved))) {
       this.updateTiles(now);
       this.tileDirty = false;
       this.lastTiles = now;
@@ -1605,14 +1837,14 @@ export class ReliefEngine {
     if (this.tu) this.tu.uCurtain.value = this.cmp ? this.cmp.curtain.position * this.renderer.domElement.width : -1;
 
     const P = this.pointer;
-    if (P.dirty || (moved && P.in && this.frameN % 3 === 0)) { this.updateHover(); P.dirty = false; }
+    if (!cap && (P.dirty || (moved && P.in && this.frameN % 3 === 0))) { this.updateHover(); P.dirty = false; }
 
-    // el agua se anima mientras hay actividad reciente; luego se queda quieta y no gasta GPU
+    // el agua se anima mientras hay actividad reciente (y siempre al grabar); luego se queda quieta y no gasta GPU
     const sky = this.clouds;
-    const ambient = this.layers.water && !this.reduceMotion && (now < this.ambientUntil || c.autoRotate);
+    const ambient = this.layers.water && !this.reduceMotion && (!!cap || now < this.ambientUntil || c.autoRotate);
     if (ambient) this.shared.uTime.value += dt;
-    // las nubes avanzan con el lapso de tiempo (y despacio mientras el mapa gira solo); aparecen y se van con fundido
-    if (sky?.step(dt, this.reduceMotion ? 0 : sky.playing ? 1 : c.autoRotate ? 0.25 : 0, intro >= 1)) active = true;
+    // las nubes avanzan con el lapso de tiempo (y despacio mientras el mapa gira solo o se graba); aparecen y se van con fundido
+    if (sky?.step(dt, this.reduceMotion ? 0 : sky.playing ? 1 : c.autoRotate || cap ? 0.25 : 0, intro >= 1)) active = true;
     // nubes de hoy: «Animar» repite el día del satélite moviendo la hora del Sol (~0.6 h por segundo)
     if (sky?.isLive && sky.playing && !this.reduceMotion) {
       const st = sky.liveStatus, h0 = Math.max(5, Math.min(20, st?.firstHour ?? 5)), h1 = Math.min(20.5, Math.max(h0 + 0.5, st?.lastHour ?? 20.5));
@@ -1625,11 +1857,11 @@ export class ReliefEngine {
     // la sombra del bloque sobre el suelo se desvanece de cerca (cada texel de la sombra mide ~70 m)
     (this.ground.material as THREE.ShadowMaterial).opacity = 0.38 * smooth(0.12, 0.35, dist);
 
-    if (this.labelsDirty && this.labels && (this.frameN % 2 === 0 || !active) && intro > 0.85) {
+    if (!cap && this.labelsDirty && this.labels && (this.frameN % 2 === 0 || !active) && intro > 0.85) {
       this.labels.layout(cam, model.matrixWorld, dist, this.layers, this.el.stage.clientWidth, this.el.stage.clientHeight);
       this.labelsDirty = false;
     }
-    if (this.miniDirty && (this.frameN % 3 === 0 || !(active || moved))) {
+    if (!cap && this.miniDirty && (this.frameN % 3 === 0 || !(active || moved))) {
       this.drawMini();
       this.miniDirty = false;
       if (this.el.needle) this.el.needle.style.transform = `rotate(${((this.curSph().theta * 180) / Math.PI).toFixed(1)}deg)`;
@@ -1639,36 +1871,37 @@ export class ReliefEngine {
     // resolución adaptable: si al moverse no alcanza ~40 cps, baja la densidad de píxeles; en reposo la recupera
     const moving = active || moved;
     if (moving) this.lastActive = now;
-    else if (this.viewMoved && intro >= 1) { this.viewMoved = false; this.opts.onViewChange?.(); }
-    // al detenerse, un cuadro más con las nubes a resolución completa
-    if (!moving && sky?.coarse && now - this.lastActive > 150) this.renderDirty = true;
-    if (moving) {
-      this.frameEma = this.frameEma * 0.9 + dt * 1000 * 0.1;
-      if (++this.moveFrames > 20 && this.frameEma > 26 && this.dpr > 0.75) {
-        this.dpr = Math.max(0.75, this.dpr * 0.8);
+    else if (!cap && this.viewMoved && intro >= 1) { this.viewMoved = false; this.opts.onViewChange?.(); }
+    if (!cap) {
+      // al detenerse, un cuadro más con las nubes a resolución completa
+      if (!moving && sky?.coarse && now - this.lastActive > 150) this.renderDirty = true;
+      if (moving) {
+        this.frameEma = this.frameEma * 0.9 + dt * 1000 * 0.1;
+        if (++this.moveFrames > 20 && this.frameEma > 26 && this.dpr > 0.75) {
+          this.dpr = Math.max(0.75, this.dpr * 0.8);
+          this.renderer.setPixelRatio(this.dpr);
+          this.frameEma = 16; this.moveFrames = 0;
+        }
+      } else if (this.dpr < this.fullDpr && now - this.lastMove > 250) {
+        this.dpr = this.fullDpr;
         this.renderer.setPixelRatio(this.dpr);
-        this.frameEma = 16; this.moveFrames = 0;
+        this.renderDirty = true;
+        this.moveFrames = 0;
       }
-    } else if (this.dpr < this.fullDpr && now - this.lastMove > 250) {
-      this.dpr = this.fullDpr;
-      this.renderer.setPixelRatio(this.dpr);
-      this.renderDirty = true;
-      this.moveFrames = 0;
     }
-
-    if (moving || this.renderDirty || (ambient && this.frameN % 2 === 0)) {
-      // volumen y sombra de las nubes (en sus propios destinos) antes del cuadro; al moverse, con menos resolución
-      if (sky?.visible) sky.render(cam, c.target, this.ex, moving);
-      if (this.shadowDirty) { this.renderer.shadowMap.needsUpdate = true; this.shadowDirty = false; }
-      const tr = this.timings.firstFrame === undefined ? performance.now() : 0;
-      this.renderer.render(this.scene, cam);
-      if (tr) this.timings.firstFrame = Math.round(performance.now() - tr);
-      this.renderDirty = false;
-    }
-
+    const render = moving || this.renderDirty || (ambient && this.frameN % 2 === 0);
     const keep = moving || ambient || this.renderDirty || this.labelsDirty || this.miniDirty || P.dirty || this.dpr < this.fullDpr || this.tileDirty || !!sky?.coarse;
-    if (keep) this.raf = requestAnimationFrame(this.frame);
-    else this.running = false;
-  };
-}
+    return { moving, render, keep };
+  }
 
+  /** Dibuja el cuadro: volumen y sombra de las nubes (en sus propios destinos; al moverse, con menos resolución) y la escena. */
+  private draw(moving: boolean) {
+    const sky = this.clouds;
+    if (sky?.visible) sky.render(this.camera, this.controls.target, this.ex, moving && !this.cap);
+    if (this.shadowDirty) { this.renderer.shadowMap.needsUpdate = true; this.shadowDirty = false; }
+    const tr = this.timings.firstFrame === undefined ? performance.now() : 0;
+    this.renderer.render(this.scene, this.camera);
+    if (tr) this.timings.firstFrame = Math.round(performance.now() - tr);
+    this.renderDirty = false;
+  }
+}

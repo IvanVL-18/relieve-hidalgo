@@ -891,9 +891,11 @@ export class Clouds {
     }
   }
 
-  /** Tamaño del lienzo en px de CSS: el volumen se calcula a la mitad (menos en pantallas muy grandes o celulares). */
-  setSize(w: number, h: number) {
-    const k = Math.min(this.small ? 0.4 : 0.5, Math.sqrt(560000 / Math.max(1, w * h)));
+  /**
+   * Tamaño del lienzo en px de CSS: el volumen se calcula a la mitad (menos en pantallas muy grandes o celulares). k fija
+   * la fracción (las grabaciones usan 1: resolución completa).
+   */
+  setSize(w: number, h: number, k = Math.min(this.small ? 0.4 : 0.5, Math.sqrt(560000 / Math.max(1, w * h)))) {
     const cw = Math.max(1, Math.round(w * k)), ch = Math.max(1, Math.round(h * k));
     if (cw === this.size.x && ch === this.size.y) return;
     this.size.set(cw, ch);

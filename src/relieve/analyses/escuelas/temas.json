@@ -1,0 +1,53 @@
+{
+  "aviso": "Textos de consulta para primaria y secundaria preparados con datos de INEGI y de la Secretaría de Cultura de Hidalgo; pendientes de revisión por docentes.",
+  "regiones": {
+    "huasteca": { "color": 2, "texto": "Tierra baja, cálida y muy lluviosa en el norte del estado. Hay lomeríos con selva, potreros, cafetales y naranjales. En muchas comunidades se habla náhuatl." },
+    "sierra-gorda": { "color": 1, "texto": "Montañas de roca caliza en el noroeste, junto a Querétaro, cortadas por barrancas profundas como la del río Moctezuma. Tiene pueblos mineros como Zimapán y Jacala." },
+    "sierra-alta": { "color": 0, "texto": "Montañas altas y húmedas de la Sierra Madre Oriental. La humedad del golfo de México choca con ellas y deja neblina y lluvia; crece el bosque mesófilo de montaña." },
+    "sierra-baja": { "color": 3, "texto": "Mesetas y lomas cortadas por barrancas, como la de Metztitlán. Es más seca que la Sierra Alta y tiene muchísimas cactáceas." },
+    "sierra-oriental": { "color": 1, "texto": "Montañas húmedas en el oriente, junto a Veracruz y Puebla. Viven pueblos otomíes, tepehuas y nahuas; de aquí son los bordados de Tenango." },
+    "mezquital": { "color": 4, "texto": "Valles y llanos semisecos en el occidente, tierra del pueblo hñähñu (otomí). Con el agua del río Tula se riegan alfalfa y maíz." },
+    "comarca": { "color": 2, "texto": "Montañas de origen volcánico con bosques de oyamel y pueblos mineros como Real del Monte y Mineral del Chico, donde se sacó plata durante cientos de años." },
+    "tulancingo": { "color": 0, "texto": "Un valle amplio y fértil en el oriente del altiplano. Tulancingo es su ciudad principal, conocida por sus productos lácteos y sus textiles." },
+    "cuenca": { "color": 1, "texto": "Llanos del sur que forman parte de la cuenca del valle de México. Aquí están Pachuca, la capital, y Tizayuca, junto al Estado de México." },
+    "altiplanicie": { "color": 3, "texto": "Llanos altos y frescos del sureste, a más de 2 400 m, con lagunas como la de Tecocomulco. Fue tierra de magueyes y haciendas pulqueras; hoy se siembra cebada." }
+  },
+  "provincias": {
+    "Sierra Madre Oriental": "Cordillera de rocas que se formaron en el fondo de un mar antiguo, sobre todo caliza, y que después se plegaron y levantaron. Cruza el norte y el centro de Hidalgo.",
+    "Eje Neovolcánico": "Franja de volcanes que cruza México de oeste a este. En Hidalgo forma el sur del estado: sierras volcánicas, mesetas de lava y llanos.",
+    "Llanura Costera del Golfo Norte": "Tierras bajas que descienden hacia el golfo de México. En Hidalgo solo ocupa una franja pequeña de la Huasteca.",
+    "Mesa del Centro": "Altiplanicie del centro del país que apenas toca el estado."
+  },
+  "topoformas": {
+    "Sierra": "Montañas alargadas, con laderas empinadas.",
+    "Lomerío": "Cerros bajos y redondeados, unos junto a otros.",
+    "Meseta": "Terreno alto y casi plano, con orillas empinadas.",
+    "Valle": "Tierra baja y alargada entre montañas, por donde corre un río.",
+    "Llanura": "Terreno plano y extenso.",
+    "Cañón": "Valle angosto y muy profundo, con paredes casi verticales, labrado por un río.",
+    "Cuerpo de agua": "Presas, lagos y lagunas."
+  },
+  "climas": {
+    "temperatura": "Por su temperatura media del año, los climas son cálidos (más de 22 °C), semicálidos (18 a 22 °C), templados (12 a 18 °C), semifríos (5 a 12 °C) o fríos.",
+    "humedad": "Por su lluvia son húmedos (llueve mucho, casi todo el año), subhúmedos (llueve en verano), semisecos y secos (llueve poco y se evapora más agua de la que cae)."
+  },
+  "agua": [
+    "Casi toda el agua de Hidalgo llega al río Pánuco y de ahí al golfo de México: los ríos Tula y San Juan forman el Moctezuma, que recibe al Amajac y a los ríos de la Huasteca.",
+    "El oriente, en la Sierra Otomí-Tepehua, desagua hacia los ríos Tuxpan y Cazones, que también van al golfo.",
+    "Los llanos del sur, cerca de Pachuca, Tizayuca y Apan, están en la cuenca del valle de México."
+  ],
+  "preguntas": [
+    { "q": "¿Cuántos municipios tiene Hidalgo?", "op": ["58", "84", "125"], "ok": 1, "por": "Hidalgo tiene 84 municipios; el más poblado es Pachuca de Soto.", "ir": { "tema": "regiones" } },
+    { "q": "¿En qué región está Huejutla de Reyes?", "op": ["Sierra Gorda", "Huasteca", "Valle del Mezquital"], "ok": 1, "por": "Huejutla es la ciudad principal de la Huasteca, la región más baja y lluviosa del estado.", "ir": { "tema": "regiones", "region": "huasteca" } },
+    { "q": "¿Qué provincia del relieve ocupa más de la mitad del estado?", "op": ["Sierra Madre Oriental", "Eje Neovolcánico", "Llanura Costera del Golfo"], "ok": 1, "por": "El Eje Neovolcánico ocupa el 53 % de Hidalgo (todo el sur); la Sierra Madre Oriental, el 45 %, y la Llanura Costera, poco más del 1 %.", "ir": { "tema": "relieve", "capa": "provincia" } },
+    { "q": "¿Qué forma del relieve cubre más de la mitad de Hidalgo?", "op": ["Llanura", "Sierra", "Valle"], "ok": 1, "por": "Casi el 59 % del estado son sierras; le siguen los lomeríos (20 %) y las llanuras (13 %).", "ir": { "tema": "relieve", "capa": "topoforma" } },
+    { "q": "¿Qué clima tiene la mayor parte del Valle del Mezquital?", "op": ["Cálido húmedo", "Semiseco templado", "Templado húmedo"], "ok": 1, "por": "En el Mezquital llueve poco: domina el clima semiseco templado. Por eso es tan importante el riego.", "ir": { "tema": "clima", "region": "mezquital" } },
+    { "q": "¿Qué clima ocupa más superficie en todo el estado?", "op": ["Templado subhúmedo", "Semicálido húmedo", "Seco semicálido"], "ok": 0, "por": "El templado subhúmedo cubre el 37 % de Hidalgo: el altiplano y las partes altas de las sierras.", "ir": { "tema": "clima" } },
+    { "q": "¿A qué altura está el punto más alto de Hidalgo, según el relieve de INEGI?", "op": ["2 450 m", "3 379 m", "5 610 m"], "ok": 1, "por": "El punto más alto está a 3 379 m sobre el nivel del mar, en el sureste, cerca de los límites con Puebla y Tlaxcala.", "ir": { "volar": "cima" } },
+    { "q": "¿A qué río llega el agua de casi todo el estado?", "op": ["Lerma", "Balsas", "Pánuco"], "ok": 2, "por": "El Tula, el Moctezuma y el Amajac llevan el agua al río Pánuco, que desemboca en el golfo de México.", "ir": { "tema": "agua" } },
+    { "q": "¿Cómo se llama un valle angosto y muy profundo, con paredes casi verticales?", "op": ["Meseta", "Cañón", "Llanura"], "ok": 1, "por": "Un cañón lo labra un río durante miles de años, como el del Moctezuma, en el límite con Querétaro.", "ir": { "tema": "relieve", "capa": "topoforma" } },
+    { "q": "¿Qué pueblo originario vive en el Valle del Mezquital?", "op": ["Maya", "Hñähñu (otomí)", "Purépecha"], "ok": 1, "por": "El Valle del Mezquital es tierra del pueblo hñähñu, también llamado otomí.", "ir": { "tema": "regiones", "region": "mezquital" } },
+    { "q": "¿Qué región tiene más habitantes?", "op": ["Huasteca", "Valle del Mezquital", "Comarca Minera"], "ok": 1, "por": "En los 27 municipios del Valle del Mezquital vive más de un millón de personas (Censo 2020).", "ir": { "tema": "regiones", "region": "mezquital" } },
+    { "q": "Los Prismas Basálticos de Huasca son columnas de…", "op": ["hielo", "lava que se enfrió", "sal"], "ok": 1, "por": "Son columnas de basalto que se formaron cuando una colada de lava se enfrió y se agrietó, hace unos 2.6 millones de años.", "ir": { "volar": "prismas" } }
+  ]
+}

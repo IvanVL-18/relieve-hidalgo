@@ -133,6 +133,17 @@ if (exists('movilidad_flujos.json')) {
   await insert('movilidad_flujos', ['tipo', 'cve_mun_origen', 'destino_clave', 'destino', 'personas', 'registros'], readJSON(path.join(OUT, 'movilidad_flujos.json')));
 }
 
+if (exists('geoparque_sitios.json')) {
+  await db.query(`create table relieve.geoparque_sitios (id text primary key, tipo text, numero smallint, nombre text, interes text, grupo text, municipio text, anio smallint, lon double precision, lat double precision, texto text, foto_autor text, foto_licencia text, foto_pagina text)`);
+  await db.query(`comment on table relieve.geoparque_sitios is 'Geositios del Geoparque Mundial de la UNESCO Comarca Minera (Canet et al., 2017, Terra Digitalis) y Pueblos Mágicos de Hidalgo (año del nombramiento), con la foto de Wikimedia Commons usada en el visor (autor y licencia)'`);
+  await insert('geoparque_sitios', ['id', 'tipo', 'numero', 'nombre', 'interes', 'grupo', 'municipio', 'anio', 'lon', 'lat', 'texto', 'foto_autor', 'foto_licencia', 'foto_pagina'], readJSON(path.join(OUT, 'geoparque_sitios.json')));
+}
+if (exists('regiones_geoculturales.json')) {
+  await db.query(`create table relieve.regiones_geoculturales (cve_mun smallint primary key, municipio text, region_id text, region text)`);
+  await db.query(`comment on table relieve.regiones_geoculturales is 'Región geocultural de cada municipio según el mapa de la Secretaría de Cultura del Estado de Hidalgo (2019); el número de regiones y sus límites cambian según la fuente'`);
+  await insert('regiones_geoculturales', ['cve_mun', 'municipio', 'region_id', 'region'], readJSON(path.join(OUT, 'regiones_geoculturales.json')));
+}
+
 /* red vial */
 if (exists('vias_nodos.json')) {
   await db.query(`create table relieve.red_vial_nodos (id integer primary key, lon double precision, lat double precision)`);

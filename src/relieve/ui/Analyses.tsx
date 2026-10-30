@@ -1,7 +1,7 @@
 import { Component, Suspense, lazy, useEffect, useRef, useState, type ComponentType, type ErrorInfo, type LazyExoticComponent, type ReactNode } from 'react';
 import type { Datasets } from '../analyses/datasets';
 import { ANALYSES, GROUP_ORDER } from '../analyses/registry';
-import type { AnalysisContext, AnalysisDef, AnalysisLink, AnalysisProps } from '../analyses/types';
+import type { AnalysisContext, AnalysisDef, AnalysisLink, AnalysisProps, SceneApi, SceneChange, ViewerMode } from '../analyses/types';
 import { Loading } from '../analyses/ui';
 import type { ReliefEngine } from '../engine/Engine';
 import { IconClose } from './icons';
@@ -22,7 +22,8 @@ class Boundary extends Component<{ children: ReactNode }, { error: string | null
 }
 
 /** Menú con todos los análisis, agrupados; los que aún no existen aparecen como «Próximamente». */
-export function AnalysisMenu({ active, onPick, onClose }: { active: string | null; onPick: (id: string) => void; onClose: () => void }) {
+/** ids: solo esos análisis (modo escuelas), en ese orden y sin los «Próximamente» */
+export function AnalysisMenu({ active, onPick, onClose, ids }: { active: string | null; onPick: (id: string) => void; onClose: () => void; ids?: string[] }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     addEventListener('keydown', onKey);
@@ -36,7 +37,7 @@ export function AnalysisMenu({ active, onPick, onClose }: { active: string | nul
       </header>
       <div className="rh-drawer-body">
         {GROUP_ORDER.map(g => {
-          const items = ANALYSES.filter(a => a.grupo === g);
+          const items = ids ? ids.map(id => ANALYSES.find(a => a.id === id && a.load && a.grupo === g)).filter((a): a is AnalysisDef => !!a) : ANALYSES.filter(a => a.grupo === g);
           if (!items.length) return null;
           return (
             <section key={g}>
@@ -63,9 +64,10 @@ export function AnalysisMenu({ active, onPick, onClose }: { active: string | nul
  * Panel del análisis activo. Crea su mapa con ámbito y lo limpia al cerrar o cambiar de análisis. initialParams: el
  * estado que traía un enlace (solo para el análisis con el que se abrió); onParams avisa el estado actual.
  */
-export function AnalysisPanel({ id, engine, datasets, small, onClose, initialParams, onParams }: {
-  id: string; engine: ReliefEngine; datasets: Datasets; small: boolean; onClose: () => void;
+export function AnalysisPanel({ id, engine, datasets, small, onClose, initialParams, onParams, scene, mode = 'normal' }: {
+  id: string; engine: ReliefEngine; datasets: Datasets; small: boolean; onClose?: () => void;
   initialParams?: Record<string, string> | null; onParams?: (params: Record<string, string>) => void;
+  scene: SceneApi; mode?: ViewerMode;
 }) {
   const def = ANALYSES.find(a => a.id === id)!;
   const [ctx, setCtx] = useState<AnalysisContext | null>(null);
@@ -89,8 +91,22 @@ export function AnalysisPanel({ id, engine, datasets, small, onClose, initialPar
     };
     notify.current?.({ ...st.values });
     const map = engine.createScope();
-    setCtx({ map, data: datasets, meta: map.meta, small, link });
-    return () => { map.dispose(); engine.select(0); setCtx(null); };
+    // lo que el análisis cambie del panel «Capas y luz» se anota la primera vez para volverlo al cerrar
+    const saved: SceneChange = {};
+    const sc: SceneApi = {
+      get: () => scene.get(),
+      set: ch => {
+        const cur = scene.get();
+        if (ch.baseMap !== undefined && saved.baseMap === undefined) saved.baseMap = cur.baseMap;
+        if (ch.hour !== undefined && saved.hour === undefined) saved.hour = cur.hour;
+        if (ch.exaggeration !== undefined && saved.exaggeration === undefined) saved.exaggeration = cur.exaggeration;
+        for (const k of Object.keys(ch.layers ?? {}) as (keyof typeof cur.layers)[]) if (!(k in (saved.layers ??= {}))) saved.layers[k] = cur.layers[k];
+        for (const k of Object.keys(ch.clouds ?? {}) as (keyof typeof cur.clouds)[]) if (!(k in (saved.clouds ??= {}))) (saved.clouds as Record<string, unknown>)[k] = cur.clouds[k];
+        scene.set(ch);
+      },
+    };
+    setCtx({ map, data: datasets, meta: map.meta, small, link, scene: sc, mode });
+    return () => { map.dispose(); engine.select(0); setCtx(null); if (Object.keys(saved).length) scene.set(saved); };
     // initialParams solo cuenta al abrir el análisis
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, datasets, id, small]);
@@ -102,7 +118,7 @@ export function AnalysisPanel({ id, engine, datasets, small, onClose, initialPar
           <div className="rh-mono">{def.grupo}</div>
           <div className="rh-card-title">{def.titulo}</div>
         </div>
-        <button type="button" className="rh-icon-btn" aria-label="Cerrar análisis" onClick={onClose}><IconClose /></button>
+        {onClose && <button type="button" className="rh-icon-btn" aria-label="Cerrar análisis" onClick={onClose}><IconClose /></button>}
       </header>
       <div className="rh-apanel-body">
         <Boundary key={id}>

@@ -26,6 +26,9 @@ export interface LabelItem {
 
 export interface LabelLayers { places: boolean; water: boolean }
 
+/** Etiqueta colocada sin HTML: x = punto de anclaje (el de la izquierda en las que llevan punto), y = centro del texto. */
+export interface Placed { text: string; sub?: string; kind: LabelKind; x: number; y: number }
+
 /** Etiquetas HTML ancladas al relieve (la mejor altura disponible al crearlas), con detección de choques en pantalla. */
 export class Labels {
   readonly items: LabelItem[] = [];
@@ -72,7 +75,11 @@ export class Labels {
   }
   get pinPoint() { return this.pin; }
 
-  layout(camera: THREE.Camera, model: THREE.Matrix4, dist: number, layers: LabelLayers, w: number, h: number) {
+  /**
+   * Coloca las etiquetas para un lienzo de w × h px. Con out no toca el HTML: deja ahí las que se verían (grabaciones,
+   * que tienen otro tamaño que la pantalla).
+   */
+  layout(camera: THREE.Camera, model: THREE.Matrix4, dist: number, layers: LabelLayers, w: number, h: number, out?: Placed[]) {
     const placed = this.placed, proj = this.proj;
     placed.length = 0;
     // las de cerca (localidades pequeñas y colonias) son miles: las que quedan lejos en planta se descartan sin proyectar
@@ -109,19 +116,25 @@ export class Labels {
         for (const b of placed) if (box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1]) { want = false; break; }
         if (want) {
           placed.push(box);
-          o.x = x0; o.y = y0;
-          (o.el ?? this.element(o)).style.transform = `translate3d(${x0.toFixed(1)}px, ${y0.toFixed(1)}px, 0)`;
+          if (out) out.push({ text: o.t, sub: o.s, kind: o.k, x, y: y0 + 9 });
+          else {
+            o.x = x0; o.y = y0;
+            (o.el ?? this.element(o)).style.transform = `translate3d(${x0.toFixed(1)}px, ${y0.toFixed(1)}px, 0)`;
+          }
         }
       }
-      if (want !== o.on) { o.on = want; o.el?.classList.toggle('on', want); }
+      if (!out && want !== o.on) { o.on = want; o.el?.classList.toggle('on', want); }
     }
     if (this.pin) {
       proj.copy(this.pin).applyMatrix4(model).project(camera);
-      const vis = proj.z < 1;
+      const vis = proj.z < 1, px = (proj.x * 0.5 + 0.5) * w, py = (-proj.y * 0.5 + 0.5) * h;
+      if (out) { if (vis) this.pinOut = { text: this.pinEl.querySelector('b')!.textContent ?? '', x: px, y: py }; else this.pinOut = null; return; }
       this.pinEl.classList.toggle('on', vis);
-      if (vis) this.pinEl.style.transform = `translate3d(${((proj.x * 0.5 + 0.5) * w).toFixed(1)}px, ${((-proj.y * 0.5 + 0.5) * h).toFixed(1)}px, 0) translate(-50%, -100%)`;
-    }
+      if (vis) this.pinEl.style.transform = `translate3d(${px.toFixed(1)}px, ${py.toFixed(1)}px, 0) translate(-50%, -100%)`;
+    } else if (out) this.pinOut = null;
   }
+  /** marcador de la última colocación con out (px del lienzo de esa colocación) */
+  pinOut: { text: string; x: number; y: number } | null = null;
 
   dispose() { this.layer.replaceChildren(); }
 }

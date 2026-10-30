@@ -2,7 +2,8 @@
 
 Modelo 3D interactivo del estado de Hidalgo con datos oficiales: relieve real, uso de suelo de INEGI, imagen
 satelital, ríos, presas, municipios y localidades, luz solar según la hora y vista nocturna. Además incluye análisis de
-población, marginación, acceso a servicios, cuencas, inundación, laderas y cambio de uso de suelo. Está hecho con React, TypeScript y three.js y funciona como un componente
+población, marginación, acceso a servicios, cuencas, inundación, laderas, cambio de uso de suelo, antenas, sol y movilidad, y herramientas
+para difundirlo: recorridos guiados, geoparque, video, impresión 3D y un modo para escuelas. Está hecho con React, TypeScript y three.js y funciona como un componente
 que se puede incrustar en cualquier sitio React.
 
 ![Uso de suelo de INEGI sobre el relieve](docs/uso-de-suelo.webp)
@@ -52,9 +53,19 @@ que se puede incrustar en cualquier sitio React.
 | Movilidad | Arcos 3D de quienes viajan a diario a trabajar o estudiar a otro municipio, al valle de México u otros estados (muestra del Censo 2020): adónde va la gente de cada municipio, de dónde llega, cuánto tarda y en qué |
 | Cobertura de antenas | Hasta seis torres en los cerros: zona con línea de vista desde la antena (o las zonas de sombra), localidades y habitantes con y sin ella, cuánto más alta tendría que ser la antena para llegar a las que faltan, y el perfil de la línea de vista a cualquier localidad |
 
-El menú también muestra los análisis planeados («Próximamente»): recorridos guiados, impresión 3D y más. Las piezas que necesitan ya están en la base: capas
-raster con su propia cobertura y paleta, cortina para comparar, y consultas de elevación, pendiente, cuencas y camino
-del agua (ver «Agregar un análisis»).
+**Difusión** (en el mismo menú)
+
+| Herramienta | Qué hace |
+|---|---|
+| Recorridos guiados | Vuelos narrados por el estado: «Hidalgo de un vistazo» (de la Huasteca a la Comarca Minera, 12 paradas), «El camino del agua» y «Geoparque Comarca Minera». Cada parada cambia la luz, el mapa base y las nubes; se puede pausar, saltar de parada o leer en voz alta. Con `?kiosco` se repiten solos para un módulo táctil en ferias |
+| Geoparque y Pueblos Mágicos | Los 31 geositios del Geoparque Mundial de la UNESCO Comarca Minera y los 9 Pueblos Mágicos, con foto (Wikimedia Commons, con su autor y licencia), historia breve y vuelo a cada uno |
+| Video e imagen grande | Graba en MP4 una vuelta, un acercamiento, un vuelo de una vista a otra o un recorrido completo con sus textos, en horizontal, vertical o cuadrado, cuadro por cuadro (sin tirones aunque el equipo sea lento); también la vista en 4K u 8K con nombres y créditos |
+| Impresión 3D | Modelo STL (malla cerrada con base plana) del estado, un municipio o un rectángulo, con tamaño, exageración y base; para mapas táctiles, ríos hundidos o en relieve, límites y localidades en relieve |
+| Hidalgo para escuelas | Las 10 regiones geoculturales, las provincias y formas del relieve, los climas, el camino de una gota de lluvia y preguntas para clase. Con `?escuelas` el visor abre en este modo, con el menú reducido y letra más grande |
+
+Falta, de la lista original de ideas, las preguntas en lenguaje natural. Las piezas para nuevos análisis están en la base: capas
+raster con su propia cobertura y paleta, cortina para comparar, consultas de elevación, pendiente, cuencas y camino
+del agua, cámara guiada y grabación cuadro por cuadro (ver «Agregar un análisis»).
 
 ![Relieve y marginación](docs/relieve-y-marginacion.webp)
 ![Accesibilidad a hospitales](docs/accesibilidad.webp)
@@ -70,10 +81,13 @@ npm run dev
 
 La dirección de la página sigue a la vista, así que se puede copiar de la barra del navegador o con el botón de enlace.
 Parámetros: `?vista=lon,lat,km,inclinación,rumbo` (cámara; km = distancia al punto que mira), `?analisis=accesibilidad`
-(o `poblacion`, `localidades`, `marginacion`, `cuencas`, `inundacion`, `laderas`, `cambio-uso`, `perfil`) con sus
+(o `poblacion`, `localidades`, `marginacion`, `cuencas`, `inundacion`, `laderas`, `cambio-uso`, `perfil`, `antenas`, `solar`,
+`movilidad`, `recorridos`, `geoparque`, `video`, `impresion`, `escuelas`) con sus
 parámetros `a.*` (por ejemplo `&a.punto=-98.7654,21.2387` en cuencas), `?mapa=satelite` o `?mapa=altitud`, `?hora=19.5`,
 `?exag=3`, `?mun=13048`, `?nubes=tormenta` (o `auto`, `cumulos`, `nublado`, `niebla`, `hoy` para las del satélite —con `&dia=2026-09-11`, las de otro día—, `no`), `?lapso` (nubes en
-movimiento), `?quieto` (sin giro) y `?embed` (el mapa dentro de una página normal).
+movimiento), `?quieto` (sin giro), `?embed` (el mapa dentro de una página normal), `?kiosco` (recorridos en bucle para una
+pantalla táctil: sin buscador, menú ni paneles; si alguien toma el mapa, el recorrido sigue a los 45 s) y `?escuelas`
+(interfaz para clase).
 
 Los datos procesados ya vienen en `src/relieve/data/`, así que no hace falta descargar nada para correrlo.
 
@@ -114,6 +128,8 @@ import { RelieveHidalgo, decodeViewState, viewStateUrl } from './relieve';
 />
 ```
 
+El modo se elige con `mode="kiosco"` o `mode="escuelas"` (por omisión `"normal"`).
+
 `viewStateUrl` conserva los parámetros propios de la página y reemplaza solo los del mapa. El botón «Copiar enlace»
 usa la página actual; con `shareUrl={s => ...}` se arma otra dirección, y `showShare={false}` lo oculta. La ref
 también da `getViewState()`.
@@ -135,8 +151,11 @@ el paquete se descarga completo una vez y todo sigue funcionando.
 3. Si necesitas el relieve, pídelo a `ctx.data.terrain()`: elevación de puntos, perfiles, rejillas de elevación,
    pendiente, orientación o área drenada, cuenca de un punto, camino del agua, inundación y zona visible desde torres
    (30 m donde hay teselas, si no 90 m).
-4. Regístralo en `src/relieve/analyses/registry.ts`.
-5. Para que lo que elige el usuario viaje en los enlaces, usa `useLinked` en lugar de `useState`:
+4. Para presentar: `ctx.map.followPath(ms => vista)` guía la cámara cuadro por cuadro, `prefetch(vista)` baja antes el
+   detalle de donde va a ir, `capture({ width, height })` graba cuadro por cuadro a tamaño fijo (video, fotos grandes) y
+   `ctx.scene.set({ baseMap, hour, clouds… })` cambia lo del panel «Capas y luz» (vuelve solo al cerrar el análisis).
+5. Regístralo en `src/relieve/analyses/registry.ts`.
+6. Para que lo que elige el usuario viaje en los enlaces, usa `useLinked` en lugar de `useState`:
    `const [vista, setVista] = useLinked(ctx.link, 'vista', 'indice', oneOf('indice', 'atlas'))`.
 
 ```tsx
@@ -157,7 +176,7 @@ teselas de elevación y de ahí saca el relieve del visor (270 m), el de 90 m, l
 direcciones de flujo y las estadísticas por municipio y localidad. Si Overpass no responde, los ríos y presas salen de
 la copia `data-src/osm_agua.json.gz`.
 
-Los datos procesados pesan ~39 MB, pero al abrir el mapa se descargan ~4 MB (cada análisis baja sus capas al abrirse); el resto (relieve de 30 m e imagen fina)
+Los datos procesados pesan ~42 MB, pero al abrir el mapa se descargan ~4 MB (cada análisis baja sus capas al abrirse); el resto (relieve de 30 m e imagen fina)
 llega por partes al acercarse.
 
 ### Pruebas
@@ -172,7 +191,7 @@ Las referencias visuales dependen de la tarjeta gráfica: se comparan en el mism
 
 La base de datos (esquema `relieve`) tiene municipios, localidades con minutos al servicio más cercano, servicios,
 lugares (localidades fuera del censo y colonias), uso de suelo (Series VII y VI), la red de ríos con orden de Strahler, deslizamientos registrados,
-susceptibilidad de laderas y radiación solar por municipio, traslados al trabajo y a la escuela entre municipios, la red vial como grafo y vistas para consultas frecuentes. El mapa
+susceptibilidad de laderas y radiación solar por municipio, traslados al trabajo y a la escuela entre municipios, geositios y Pueblos Mágicos, la región geocultural de cada municipio, la red vial como grafo y vistas para consultas frecuentes. El mapa
 no la necesita: lee archivos estáticos comprimidos. La base es para consultas, análisis y la API del laboratorio.
 
 ### Fuentes y licencias
@@ -198,6 +217,10 @@ no la necesita: lee archivos estáticos comprimidos. La base es para consultas, 
 | Unidades médicas | Secretaría de Salud, catálogo CLUES (agosto 2026) | Datos abiertos del Gobierno de México |
 | Escuelas | INEGI, DENUE | Términos de libre uso del INEGI |
 | Carreteras, ríos, presas | © colaboradores de OpenStreetMap | ODbL 1.0 |
+| Geositios del Geoparque Comarca Minera | Canet, C. et al. (2017), Terra Digitalis 1(2), UNAM: tabla de los 31 geositios con coordenadas | Se usan los datos (nombres, interés y ubicación), citando el artículo |
+| Fotos de los geositios y Pueblos Mágicos | Wikimedia Commons (autor y licencia en cada ficha: CC BY, CC BY-SA o CC0) | La de cada foto |
+| Regiones geoculturales | Secretaría de Cultura del Estado de Hidalgo, mapa de regiones geoculturales (2019) | Información pública del Gobierno del Estado |
+| Climas, provincias fisiográficas y topoformas | INEGI, 1:1 000 000 (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
 | Imagen satelital (todo el estado y teselas finas) | Sentinel-2 cloudless 2016, EOX IT Services GmbH (datos modificados de Copernicus Sentinel 2016) | CC BY 4.0 |
 
 Estas atribuciones aparecen en el mapa y en la imagen descargable, y deben conservarse.
@@ -241,6 +264,14 @@ Estas atribuciones aparecen en el mapa y en la imagen descargable, y deben conse
 - El **potencial solar** es el promedio de muchos años sobre el relieve de 90 m: no ve árboles ni edificios, y un año nublado da
   menos. El clima viene del Global Solar Atlas suavizado a ~5 km; en lo plano coincide con el Atlas a ±1 % y un panel a la inclinación
   óptima sale 1–2.5 % abajo de lo que da el Atlas. Lo que daría un panel es una estimación sencilla (rendimiento de 80 %).
+- Los **recorridos** y el **modo escuelas** son textos de divulgación hechos con datos de INEGI, de la Secretaría de Cultura y del
+  artículo del geoparque; los de escuelas están pendientes de revisión por docentes. Las regiones geoculturales cambian según la fuente:
+  se sigue el mapa de la Secretaría de Cultura, que pone a Pachuca en la Cuenca de México y a Pisaflores en la Huasteca.
+- El **video** cuadro por cuadro necesita un navegador con WebCodecs y H.264 (Chrome, Edge o Safari recientes); en otros se graba
+  en tiempo real y puede salir con tirones. Grabar tarda más que lo que dura el video (un recorrido de 2 min, ~10 min en un equipo
+  de oficina con tarjeta integrada).
+- La **impresión 3D** sigue el relieve de 30 o 90 m: no hay más detalle que ese aunque se pida «Fino». Un estado de 20 cm sale de
+  ~25 MB; los rectángulos finos pueden pasar de 100 MB. Las marcas táctiles se aprecian desde ~0.8 mm de alto.
 - Las **nubes** simuladas sirven para ver el relieve con distintos cielos, no son un pronóstico: se reparten según la
   lluvia media anual y la hora, no según el tiempo de hoy.
 - Las **nubes de hoy** están donde el satélite las ve, pero su forma en 3D es una reconstrucción: la altura de la cima

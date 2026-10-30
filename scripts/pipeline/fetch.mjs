@@ -2,7 +2,7 @@
 /**
  * Descarga las fuentes públicas a data-src/cache/ (se omiten las que ya están; --force para renovar).
  *   node scripts/pipeline/fetch.mjs [relieve agua iter denue catalogo conapo clues usv usv6 lluvia rocas deslizamientos chirps cenapred vias
- *                                    satelite solar atlas_solar muestra muestra_dic]
+ *                                    satelite solar atlas_solar muestra muestra_dic climas provincias topoformas]
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -147,7 +147,7 @@ async function fetchCenapred() {
 
 if (want('relieve')) await fetchTiles(SOURCES.relieve, 12, 'png');
 if (want('agua')) await fetchWater().catch(e => log(`agua: ${e.message}; se usará la copia de data-src/osm_agua.json.gz`));
-for (const k of ['iter', 'denue', 'imm', 'iml', 'clues', 'usv', 'usv6', 'lluvia', 'rocas', 'deslizamientos', 'atlas_solar', 'muestra', 'muestra_dic']) {
+for (const k of ['iter', 'denue', 'imm', 'iml', 'clues', 'usv', 'usv6', 'lluvia', 'rocas', 'climas', 'provincias', 'topoformas', 'deslizamientos', 'atlas_solar', 'muestra', 'muestra_dic']) {
   if (!want(k)) continue;
   log(k, '…');
   const f = await download(SOURCES[k].url, SOURCES[k].file, { force });

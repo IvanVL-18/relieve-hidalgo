@@ -34,6 +34,20 @@ export const SOURCES = {
     url: `https://idefor.cnf.gob.mx/geoserver/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=geonode:rocas_mega_ent&outputFormat=application/json&bbox=${BBOX.w},${BBOX.s},${BBOX.e},${BBOX.n},EPSG:4326`,
     file: 'inegi/rocas_hidalgo.geojson', fuente: 'INEGI, conjunto de datos geológicos 1:250 000 serie I (vía IDEFOR, CONAFOR: tipo de roca en la Megalópolis 2021)', licencia: 'Términos de libre uso de la información del INEGI',
   },
+  // modo escuelas: climas (Köppen modificado por García), provincias fisiográficas y sistemas de topoformas de INEGI,
+  // publicados por CONAFOR para la Megalópolis (cubren Hidalgo)
+  climas: {
+    url: `https://idefor.cnf.gob.mx/geoserver/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=geonode:climas_inters&outputFormat=application/json&bbox=${BBOX.w},${BBOX.s},${BBOX.e},${BBOX.n},EPSG:4326`,
+    file: 'inegi/climas_hidalgo.geojson', fuente: 'INEGI, unidades climáticas 1:1 000 000 (vía IDEFOR, CONAFOR: Megalópolis)', licencia: 'Términos de libre uso de la información del INEGI',
+  },
+  provincias: {
+    url: `https://idefor.cnf.gob.mx/geoserver/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=geonode:provincias&outputFormat=application/json&bbox=${BBOX.w},${BBOX.s},${BBOX.e},${BBOX.n},EPSG:4326`,
+    file: 'inegi/provincias_hidalgo.geojson', fuente: 'INEGI, provincias fisiográficas 1:1 000 000 (vía IDEFOR, CONAFOR: Megalópolis)', licencia: 'Términos de libre uso de la información del INEGI',
+  },
+  topoformas: {
+    url: `https://idefor.cnf.gob.mx/geoserver/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=geonode:topofromas&outputFormat=application/json&bbox=${BBOX.w},${BBOX.s},${BBOX.e},${BBOX.n},EPSG:4326`,
+    file: 'inegi/topoformas_hidalgo.geojson', fuente: 'INEGI, sistemas de topoformas 1:1 000 000 (vía IDEFOR, CONAFOR: Megalópolis)', licencia: 'Términos de libre uso de la información del INEGI',
+  },
   // lluvia por pentada (5 días) de CHIRPS v3, 1981–2025: de cada archivo de Latinoamérica se lee por rangos solo la
   // franja de Hidalgo ({y} año, {m} mes, {p} pentada 1–6); se guarda un archivo por año
   chirps: {

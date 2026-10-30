@@ -88,6 +88,8 @@ export function makeTerrainUniforms(shared: SharedUniforms, hu: HeightUniforms, 
     uLinesRange: { value: 1 },
     /** metros por texel de tLines */
     uLinesTexelM: { value: 1 },
+    /** grosor de ríos y límites: px del lienzo por px de la interfaz (1 en pantalla; la escala de una grabación) */
+    uLinePx: { value: 1 },
     /** relieve de 90 m: normal (x, z) y apertura del cielo; uDetail = aparición; (escala, desplazamiento) de la normal */
     tDetail: { value: blankTexture([0, 0, 255, 255]) as THREE.Texture },
     uDetail: { value: 0 },
@@ -160,7 +162,7 @@ export function createTerrainMaterial(u: TerrainUniforms, defines: Record<string
         uniform sampler2D tFields; uniform vec2 uFieldsSize; uniform sampler2D tPalette;
         uniform float uBaseKindA; uniform sampler2D tBaseA; uniform vec2 uBaseSizeA; uniform float uBaseTilesA; uniform float uBaseTex;
         uniform float uCurtain;
-        uniform sampler2D tLines; uniform float uLines; uniform float uLinesSize; uniform float uLinesRange; uniform float uLinesTexelM;
+        uniform sampler2D tLines; uniform float uLines; uniform float uLinesSize; uniform float uLinesRange; uniform float uLinesTexelM; uniform float uLinePx;
         uniform mat3 normalMatrix;
         uniform vec3 uRock; uniform vec3 uWaterShallow; uniform vec3 uWaterDeep; uniform vec3 uSkyRefl; uniform vec3 uCityLight;
         #ifdef RH_COMPARE
@@ -335,7 +337,7 @@ export function createTerrainMaterial(u: TerrainUniforms, defines: Record<string
           float tpp = max(max(dUv.x, dUv.y) * uLinesSize, 1e-4);   // texeles por píxel
           float mpp = tpp * uLinesTexelM;                           // metros por píxel
           float acc = lf.a;
-          float halfPx = 0.5 * max(mix(0.8, 2.6, pow(acc, 1.2)), mix(8.0, 90.0, pow(acc, 1.5)) / mpp);
+          float halfPx = 0.5 * max(mix(0.8, 2.6, pow(acc, 1.2)) * uLinePx, mix(8.0, 90.0, pow(acc, 1.5)) / mpp);
           float river = (1.0 - smoothstep(halfPx - 0.6, halfPx + 0.6, ld.x / tpp)) * step(ld.x, uLinesRange * 0.98);
           // los arroyos se atenúan al alejarse; los ríos grandes no
           river *= mix(clamp(1.2 / tpp, 0.25, 1.0), 1.0, smoothstep(0.05, 0.4, acc));
@@ -343,7 +345,7 @@ export function createTerrainMaterial(u: TerrainUniforms, defines: Record<string
           float lake = 1.0 - smoothstep(-0.6, 0.6, dLake / tpp);
           rhWater = max(river, lake) * uWater;
           deep = max(smoothstep(0.5, 7.0, -dLake), smoothstep(0.3, 1.0, acc) * 0.75 * river);
-          bline = 1.0 - smoothstep(0.15, 1.3, ld.y / tpp);
+          bline = 1.0 - smoothstep(0.15 * uLinePx, 1.3 * uLinePx, ld.y / tpp);
         }
         if (uChoroAmt > 0.0) {
           vec4 ch = rhChoro(ids.x) * tw.x + rhChoro(ids.y) * tw.y + rhChoro(ids.z) * tw.z + rhChoro(ids.w) * tw.w;
