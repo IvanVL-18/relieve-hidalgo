@@ -1,9 +1,9 @@
 import type { BaseMapId } from '../shared/basemaps';
 import type { Meta } from '../shared/types';
-import type { LinesHandle, LinesSpec, PointsHandle, PointsSpec } from './overlays';
+import type { ArcsHandle, ArcsSpec, LinesHandle, LinesSpec, PointsHandle, PointsSpec } from './overlays';
 import type { RasterHandle, RasterSpec } from './rasters';
 
-export type { LinesHandle, LinesSpec, PointsHandle, PointsSpec, Tooltip } from './overlays';
+export type { ArcsHandle, ArcsSpec, LinesHandle, LinesSpec, PointsHandle, PointsSpec, Tooltip } from './overlays';
 export type { RasterHandle, RasterSpec } from './rasters';
 
 /** Lo que hay bajo el cursor o el clic. */
@@ -62,6 +62,8 @@ export interface MapApi {
   compare(spec?: CompareSpec): CompareHandle;
   addPoints(spec: PointsSpec): PointsHandle;
   addLines(spec: LinesSpec): LinesHandle;
+  /** arcos 3D entre pares de puntos (flujos de origen a destino), con grosor en px y color por arco */
+  addArcs(spec: ArcsSpec): ArcsHandle;
   /** vuela a un punto; viewKm = ancho aproximado de lo que se verá */
   flyTo(lon: number, lat: number, viewKm?: number): void;
   select(municipio: number, fly?: boolean): void;

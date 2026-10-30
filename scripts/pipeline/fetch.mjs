@@ -2,7 +2,7 @@
 /**
  * Descarga las fuentes públicas a data-src/cache/ (se omiten las que ya están; --force para renovar).
  *   node scripts/pipeline/fetch.mjs [relieve agua iter denue catalogo conapo clues usv usv6 lluvia rocas deslizamientos chirps cenapred vias
- *                                    satelite]
+ *                                    satelite solar atlas_solar muestra muestra_dic]
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -147,7 +147,7 @@ async function fetchCenapred() {
 
 if (want('relieve')) await fetchTiles(SOURCES.relieve, 12, 'png');
 if (want('agua')) await fetchWater().catch(e => log(`agua: ${e.message}; se usará la copia de data-src/osm_agua.json.gz`));
-for (const k of ['iter', 'denue', 'imm', 'iml', 'clues', 'usv', 'usv6', 'lluvia', 'rocas', 'deslizamientos']) {
+for (const k of ['iter', 'denue', 'imm', 'iml', 'clues', 'usv', 'usv6', 'lluvia', 'rocas', 'deslizamientos', 'atlas_solar', 'muestra', 'muestra_dic']) {
   if (!want(k)) continue;
   log(k, '…');
   const f = await download(SOURCES[k].url, SOURCES[k].file, { force });
@@ -166,10 +166,18 @@ if (want('satelite')) {
   await fetchTiles(SOURCES.satelite, 12, 'jpg');
   await fetchTiles(SOURCES.satelite, 13, 'jpg', nearHidalgo(13));
 }
+if (want('solar')) {
+  for (const p of SOURCES.solar.parametros) {
+    const f = await download(SOURCES.solar.url.replace('{p}', p), SOURCES.solar.file.replace('{p}', p), { force });
+    const d = JSON.parse(fs.readFileSync(f, 'utf8'));
+    if (!Array.isArray(d.features) || !d.features.length) { fs.rmSync(f); throw new Error('NASA POWER ' + p + ': respuesta sin puntos'); }
+    log('  solar ' + p + ': ' + d.features.length + ' celdas');
+  }
+}
 if (want('cenapred')) await fetchCenapred();
 if (want('chirps')) await fetchChirps();
 if (want('vias')) await fetchRoads();
 // fecha de descarga de cada fuente: la del archivo en la caché (no la de esta corrida, que puede no haber bajado nada)
-const fetchedOn = s => { const f = path.join(CACHE, s.file.replace('{mun}', '001')); return fs.existsSync(f) ? fs.statSync(f).mtime.toISOString().slice(0, 10) : null; };
+const fetchedOn = s => { const f = path.join(CACHE, s.file.replace('{mun}', '001').replace('{p}', s.parametros?.[0] ?? '')); return fs.existsSync(f) ? fs.statSync(f).mtime.toISOString().slice(0, 10) : null; };
 fs.writeFileSync(path.join(CACHE, 'fuentes.json'), JSON.stringify(Object.fromEntries(Object.entries(SOURCES).map(([k, s]) => [k, { ...s, descargado: fetchedOn(s) }])), null, 2));
 log('listo');

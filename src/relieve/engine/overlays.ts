@@ -53,6 +53,25 @@ export interface LinesHandle {
   dispose(): void;
 }
 
+/** Arcos 3D de un punto a otro (flujos): parten del relieve, suben y bajan en el destino. */
+export interface ArcsSpec {
+  lon0: Float32Array; lat0: Float32Array;
+  lon1: Float32Array; lat1: Float32Array;
+  /** RGBA sRGB por arco (alfa 0 = oculto); el arco se desvanece hacia el origen para que se lea la dirección */
+  color: Uint8Array;
+  /** grosor en px por arco (o uno para todos) */
+  width: Float32Array | number;
+  /** altura de la cima sobre la cuerda: fracción del largo del arco (0.2 por omisión) más 1.2 km, en km reales (no cambia con la exageración) */
+  lift?: number;
+}
+
+export interface ArcsHandle {
+  readonly kind: 'arcs';
+  setColors(rgba: Uint8Array): void;
+  setVisible(v: boolean): void;
+  dispose(): void;
+}
+
 const s2l = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
 
 /** Superficie compartida (heights.ts): las capas se apoyan en el mismo relieve que se dibuja. */
@@ -139,6 +158,54 @@ function screenLineMaterial(spec: LinesSpec, lift: number, sf: SurfaceShaders) {
   return mat;
 }
 
+/**
+ * Arcos: cinta de pantalla a lo largo de una parábola entre dos puntos de la superficie. Cada vértice calcula su punto
+ * del arco y el de sus vecinos, y se separa del eje perpendicularmente en pantalla (grosor en px fijo).
+ */
+function arcMaterial(lift: number, resolution: THREE.Vector2, sf: SurfaceShaders) {
+  return new THREE.ShaderMaterial({
+    defines: { ...sf.defines },
+    uniforms: { ...sf.uniforms, uLift: { value: lift }, uRes: { value: resolution } },
+    vertexShader: /* glsl */ `
+      ${HEIGHT_GLSL}
+      attribute vec2 aA; attribute vec2 aB; attribute float aT; attribute float aSide; attribute float aWidth; attribute vec4 aColor;
+      uniform float uLift; uniform vec2 uRes;
+      varying vec4 vColor; varying float vSide;
+      vec3 toLin(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
+      float hA, hB, len;
+      vec4 clipAt(float t) {
+        // cima a uLift · largo + 1.2 km sobre la cuerda, en km reales (el grupo del modelo multiplica y por la exageración):
+        // los arcos cortos libran el relieve exagerado y los largos no se disparan al exagerar
+        vec3 p = vec3(mix(aA.x, aB.x, t), mix(hA, hB, t) + (uLift * len + 1.2) * 4.0 * t * (1.0 - t) / uEx, mix(aA.y, aB.y, t));
+        return projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+      }
+      void main() {
+        hA = rhSurface(rhGridOf(aA)) * 0.001 + 0.004;
+        hB = rhSurface(rhGridOf(aB)) * 0.001 + 0.004;
+        len = length(aB - aA);
+        vec4 c = clipAt(aT), n = clipAt(min(1.0, aT + 0.02)), b = clipAt(max(0.0, aT - 0.02));
+        vColor = vec4(toLin(aColor.rgb), aColor.a * mix(0.3, 1.0, aT));
+        vSide = aSide;
+        if (aColor.a <= 0.0 || c.w <= 0.0 || n.w <= 0.0 || b.w <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+        vec2 dir = (n.xy / n.w - b.xy / b.w) * uRes;
+        dir = length(dir) > 1e-6 ? normalize(dir) : vec2(1.0, 0.0);
+        c.xy += vec2(-dir.y, dir.x) * aSide * aWidth / uRes * c.w;
+        gl_Position = c;
+      }`,
+    fragmentShader: /* glsl */ `
+      varying vec4 vColor; varying float vSide;
+      void main() {
+        float aa = fwidth(vSide);
+        gl_FragColor = vec4(vColor.rgb, vColor.a * (1.0 - smoothstep(1.0 - aa * 1.5, 1.0, abs(vSide))));
+        #include <colorspace_fragment>
+      }`,
+    transparent: true,
+    depthWrite: false,
+    // la cinta se arma en pantalla: según hacia dónde va el arco, sus triángulos quedan de frente o de espaldas
+    side: THREE.DoubleSide,
+  });
+}
+
 /** Columnas 3D: la base de cada instancia se apoya en la superficie (la matriz trae x, z y la escala). */
 function columnMaterial(sf: SurfaceShaders) {
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0, emissive: 0x000000 });
@@ -167,6 +234,7 @@ function columnMaterial(sf: SurfaceShaders) {
 export class Overlays {
   private points = new Set<PointsLayer>();
   private lines = new Set<LinesLayer>();
+  private arcs = new Set<ArcsLayer>();
   private proj = new THREE.Vector3();
   private proj2 = new THREE.Vector3();
   /** tamaño del lienzo en px CSS, para el grosor de las líneas de pantalla */
@@ -185,6 +253,14 @@ export class Overlays {
   addLines(spec: LinesSpec): LinesHandle {
     const layer = new LinesLayer(spec, this.hf, this.resolution, this.sf, this.onChange, () => { this.lines.delete(layer); this.onChange(); });
     this.lines.add(layer);
+    this.model.add(layer.object);
+    this.onChange();
+    return layer;
+  }
+
+  addArcs(spec: ArcsSpec): ArcsHandle {
+    const layer = new ArcsLayer(spec, this.hf, this.resolution, this.sf, this.onChange, () => { this.arcs.delete(layer); this.onChange(); });
+    this.arcs.add(layer);
     this.model.add(layer.object);
     this.onChange();
     return layer;
@@ -221,6 +297,67 @@ export class Overlays {
   dispose() {
     for (const L of [...this.points]) L.dispose();
     for (const L of [...this.lines]) L.dispose();
+    for (const L of [...this.arcs]) L.dispose();
+  }
+}
+
+/** Segmentos por arco: suficientes para que la parábola se vea curva de cerca. */
+const ARC_SEG = 40;
+
+class ArcsLayer implements ArcsHandle {
+  readonly kind = 'arcs';
+  readonly object: THREE.Mesh;
+  private colorAttr: THREE.BufferAttribute;
+
+  constructor(spec: ArcsSpec, hf: Heightfield, resolution: THREE.Vector2, sf: SurfaceShaders, private changed: () => void, private onDispose: () => void) {
+    const g = hf.geo, n = spec.lon0.length, nv = n * (ARC_SEG + 1) * 2;
+    const a = new Float32Array(nv * 2), b = new Float32Array(nv * 2), t = new Float32Array(nv), side = new Float32Array(nv), width = new Float32Array(nv);
+    const index = new Uint32Array(n * ARC_SEG * 6);
+    for (let i = 0, v = 0, o = 0; i < n; i++) {
+      const ax = g.toX(spec.lon0[i]), az = g.toZ(spec.lat0[i]), bx = g.toX(spec.lon1[i]), bz = g.toZ(spec.lat1[i]);
+      // grosor completo en px: el sombreador separa cada orilla w / 2 px del eje (w / resolución en coordenadas de recorte)
+      const w = typeof spec.width === 'number' ? spec.width : spec.width[i];
+      for (let s = 0; s <= ARC_SEG; s++) for (let e = 0; e < 2; e++, v++) {
+        a[v * 2] = ax; a[v * 2 + 1] = az; b[v * 2] = bx; b[v * 2 + 1] = bz;
+        t[v] = s / ARC_SEG; side[v] = e ? 1 : -1; width[v] = w;
+      }
+      const base = i * (ARC_SEG + 1) * 2;
+      for (let s = 0; s < ARC_SEG; s++, o += 6) {
+        const p = base + s * 2;
+        index.set([p, p + 1, p + 2, p + 1, p + 3, p + 2], o);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    // posición sin uso (el sombreador calcula todo), pero three la necesita para dibujar
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+    geo.setAttribute('aA', new THREE.BufferAttribute(a, 2));
+    geo.setAttribute('aB', new THREE.BufferAttribute(b, 2));
+    geo.setAttribute('aT', new THREE.BufferAttribute(t, 1));
+    geo.setAttribute('aSide', new THREE.BufferAttribute(side, 1));
+    geo.setAttribute('aWidth', new THREE.BufferAttribute(width, 1));
+    this.colorAttr = new THREE.BufferAttribute(new Uint8Array(nv * 4), 4, true);
+    geo.setAttribute('aColor', this.colorAttr);
+    geo.setIndex(new THREE.BufferAttribute(index, 1));
+    this.object = new THREE.Mesh(geo, arcMaterial(spec.lift ?? 0.2, resolution, sf));
+    this.object.frustumCulled = false;
+    this.object.renderOrder = 5;
+    this.setColors(spec.color);
+  }
+
+  setColors(rgba: Uint8Array) {
+    const out = this.colorAttr.array as Uint8Array, per = (ARC_SEG + 1) * 2;
+    for (let v = 0; v < out.length / 4; v++) out.set(rgba.subarray(Math.floor(v / per) * 4, Math.floor(v / per) * 4 + 4), v * 4);
+    this.colorAttr.needsUpdate = true;
+    this.changed();
+  }
+
+  setVisible(v: boolean) { this.object.visible = v; this.changed(); }
+
+  dispose() {
+    this.object.removeFromParent();
+    this.object.geometry.dispose();
+    (this.object.material as THREE.Material).dispose();
+    this.onDispose();
   }
 }
 

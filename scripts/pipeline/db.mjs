@@ -121,6 +121,17 @@ if (exists('laderas_municipios.json')) {
   await db.query(`comment on table relieve.laderas_municipios is 'Índice propio de susceptibilidad de laderas (pendiente a 30 m, lluvia intensa de CHIRPS, roca de INEGI y cobertura de la Serie VII) a 90 m: km² por clase y km² en zonas de peligro del atlas estatal (CENAPRED)'`);
   await insert('laderas_municipios', ['cve_mun', 'muy_baja_km2', 'baja_km2', 'media_km2', 'alta_km2', 'muy_alta_km2', 'zona_atlas_km2'], readJSON(path.join(OUT, 'laderas_municipios.json')));
 }
+if (exists('solar_municipios.json')) {
+  const cols = ['cve_mun', 'kwh_m2_anual_media', 'kwh_m2_anual_plano', 'kwh_m2_anual_min', 'kwh_m2_anual_max', 'km2_menos_1600', 'km2_1600_1800', 'km2_1800_2000', 'km2_2000_2200', 'km2_mas_2200'];
+  await db.query(`create table relieve.solar_municipios (cve_mun smallint primary key, ${cols.slice(1).map(c => `${c} real`).join(', ')})`);
+  await db.query(`comment on table relieve.solar_municipios is 'Radiación solar anual sobre el terreno a 90 m (kWh/m²·año): clima del Global Solar Atlas (Solargis, CC BY 4.0) repartido en meses con NASA POWER, con pendiente, orientación y horizonte del relieve de INEGI. plano = la de un terreno plano y despejado en el mismo lugar; km² por clase'`);
+  await insert('solar_municipios', cols, readJSON(path.join(OUT, 'solar_municipios.json')));
+}
+if (exists('movilidad_flujos.json')) {
+  await db.query(`create table relieve.movilidad_flujos (id serial primary key, tipo text, cve_mun_origen smallint, destino_clave text, destino text, personas integer, registros integer)`);
+  await db.query(`comment on table relieve.movilidad_flujos is 'Traslados diarios al trabajo y a la escuela desde cada municipio de Hidalgo (muestra del Censo 2020, cuestionario ampliado, con factor de expansión): destino_clave = municipio de Hidalgo (13mmm), municipio del Estado de México (15mmm), 09 = Ciudad de México o la clave del estado; registros < 20 = estimación imprecisa'`);
+  await insert('movilidad_flujos', ['tipo', 'cve_mun_origen', 'destino_clave', 'destino', 'personas', 'registros'], readJSON(path.join(OUT, 'movilidad_flujos.json')));
+}
 
 /* red vial */
 if (exists('vias_nodos.json')) {

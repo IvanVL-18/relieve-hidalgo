@@ -1,18 +1,18 @@
 import { makeGeo, type Geo } from '../shared/geo';
 import {
-  D8, downstreamPath, floodLevels, flowAccumulation, hornNormals, longestFlowPath, maskOutline, slopeGrid, snapToStream, upstreamMask,
-  type Flood, type FlowPath, type GridKind, type Profile, type TerrainGrid, type Watershed,
+  D8, EARTH_R, bilinear, downstreamPath, floodLevels, flowAccumulation, hornNormals, longestFlowPath, losLift, maskOutline, slopeGrid, snapToStream,
+  upstreamMask, viewshedRays, type Flood, type FlowPath, type GridKind, type Profile, type TerrainGrid, type Tower, type Viewshed, type Watershed,
 } from '../shared/terrain';
 import type { DetailResult, GridMeta, TerrainMessage, TerrainRequest } from '../shared/types';
 import { decodeDetail, decodeElev, fetchBin } from './decode';
-import { Pack, gunzip } from './pack';
+import { Pack, gunzip, type PackInfo } from './pack';
 
 /**
  * Worker de relieve, uno por visor y de larga vida:
  *   · relieve de 90 m para el sombreado fino (normales + altura), que se queda también aquí para los análisis
  *   · teselas de 30 m (altura + normal) e imagen satelital fina para el detalle al acercarse
  *   · consultas de los análisis: elevación, perfil, rejillas de elevación/pendiente/orientación/acumulación,
- *     cuenca y trayectoria del agua (D8 a 90 m)
+ *     cuenca y trayectoria del agua (D8 a 90 m), inundación y zona visible desde torres
  */
 const ctx = self as unknown as { postMessage(msg: TerrainMessage, transfer?: Transferable[]): void; onmessage: ((ev: MessageEvent<TerrainRequest>) => void) | null };
 
@@ -175,6 +175,37 @@ function nodeRange(bounds: number[], f: number, w: number, h: number) {
 }
 const boundsOf = (c0: number, c1: number, r0: number, r1: number, f: number): [number, number, number, number] =>
   [lonOf((c0 - 0.5) / f), latOf((r1 + 0.5) / f), lonOf((c1 + 0.5) / f), latOf((r0 - 0.5) / f)];
+type NodeRange = ReturnType<typeof nodeRange>;
+
+/**
+ * Alturas (m; 0 = sin dato) de los nodos de 30 m del rango R, con las teselas pedidas en paralelo. Con fill, lo que
+ * queda fuera de las teselas se llena con el relieve de 90 m.
+ */
+async function window30(info: PackInfo, R: NodeRange, fill: boolean) {
+  const f = info.f, T = info.tileCells * f, P = info.px, z = new Float32Array(R.w * R.h), ids: number[] = [];
+  for (let ty = Math.floor(R.r0 / T); ty <= Math.floor(R.r1 / T); ty++) for (let tx = Math.floor(R.c0 / T); tx <= Math.floor(R.c1 / T); tx++) {
+    if (tx < info.nx && ty < info.ny && info.has[ty * info.nx + tx]) ids.push(ty * info.nx + tx);
+  }
+  const tiles = await Promise.all(ids.map(demTile));
+  ids.forEach((id, k) => {
+    const q = tiles[k], tx = id % info.nx, ty = (id - tx) / info.nx;
+    if (!q) return;
+    for (let r = Math.max(R.r0, ty * T); r <= Math.min(R.r1, ty * T + T); r++) for (let c = Math.max(R.c0, tx * T); c <= Math.min(R.c1, tx * T + T); c++) {
+      const v = q[(r - ty * T + 1) * P + (c - tx * T + 1)];
+      if (v) z[(r - R.r0) * R.w + c - R.c0] = v * 0.25;
+    }
+  });
+  if (fill) {
+    const d = await detail(), s = d.f / f;
+    for (let r = 0; r < R.h; r++) for (let c = 0; c < R.w; c++) {
+      const i = r * R.w + c;
+      if (z[i] > 0) continue;
+      const v = bilinear(d.z, d.w, d.h, (c + R.c0) * s, (r + R.r0) * s);
+      if (v > 0) z[i] = v;
+    }
+  }
+  return z;
+}
 
 async function gridQuery(kind: GridKind, bounds: number[], res: number): Promise<TerrainGrid> {
   const info = demPack ? await demPack.open().catch(() => null) : null;
@@ -182,16 +213,7 @@ async function gridQuery(kind: GridKind, bounds: number[], res: number): Promise
   if (res <= 30 && info && kind !== 'acumulacion') {
     const f = info.f, w = (grid.W - 1) * f + 1, h = (grid.H - 1) * f + 1, R = nodeRange(bounds, f, w, h);
     if (R.w * R.h <= 4e6) {
-      const T = info.tileCells * f, P = info.px, z = new Float32Array(R.w * R.h);
-      for (let ty = Math.floor(R.r0 / T); ty <= Math.floor(R.r1 / T); ty++) for (let tx = Math.floor(R.c0 / T); tx <= Math.floor(R.c1 / T); tx++) {
-        if (tx >= info.nx || ty >= info.ny || !info.has[ty * info.nx + tx]) continue;
-        const q = await demTile(ty * info.nx + tx);
-        if (!q) continue;
-        for (let r = Math.max(R.r0, ty * T); r <= Math.min(R.r1, ty * T + T); r++) for (let c = Math.max(R.c0, tx * T); c <= Math.min(R.c1, tx * T + T); c++) {
-          const v = q[(r - ty * T + 1) * P + (c - tx * T + 1)];
-          if (v) z[(r - R.r0) * R.w + c - R.c0] = v * 0.25;
-        }
-      }
+      const z = await window30(info, R, false);
       const dxm = (grid.step / f) * geo.KX * 1000, dzm = (grid.step / f) * geo.KZ * 1000;
       const data = kind === 'elevacion' ? z.map(v => (v > 0 ? v : NaN)) : slopeGrid(z, R.w, R.h, dxm, dzm, kind);
       return { width: R.w, height: R.h, bounds: boundsOf(R.c0, R.c1, R.r0, R.r1, f), res: Math.round(dxm), data };
@@ -381,6 +403,62 @@ async function flood(lon: number, lat: number, mode: 'rio' | 'valle' = 'rio', ra
   };
 }
 
+/**
+ * Zona visible desde las torres (ver Viewshed) en el rectángulo que encierra sus radios: a 30 m (con el relieve de 90 m
+ * donde no hay teselas) si cabe en ≈ 8 millones de nodos y 4096 por lado, si no a 90 m. Los puntos se revisan uno por
+ * uno con la línea de vista exacta a cada torre que los tiene en su radio.
+ */
+async function viewshed(towers: Tower[], receiver = 1.5, radiusKm = 20, k = 4 / 3, points?: { lon: Float32Array; lat: Float32Array }): Promise<Viewshed> {
+  const ts = towers.slice(0, 6), Rk = Math.min(60, Math.max(0.5, radiusKm)), hRx = Math.max(0, receiver), kR = k * EARTH_R;
+  if (!ts.length) throw new Error('Falta al menos una torre');
+  const ground = await elevation(ts.map(t => t.lon), ts.map(t => t.lat));
+  ts.forEach((_, i) => { if (!(ground[i] > 0)) throw new Error('la torre ' + 'ABCDEF'[i] + ' queda fuera de la zona con relieve'); });
+  const bounds = [
+    Math.min(...ts.map(t => t.lon)) - Rk / geo.KX, Math.min(...ts.map(t => t.lat)) - Rk / geo.KZ,
+    Math.max(...ts.map(t => t.lon)) + Rk / geo.KX, Math.max(...ts.map(t => t.lat)) + Rk / geo.KZ,
+  ];
+  const info = demPack ? await demPack.open().catch(() => null) : null;
+  let f = 0, R: NodeRange | null = null, z: Float32Array;
+  if (info) {
+    const Ri = nodeRange(bounds, info.f, (grid.W - 1) * info.f + 1, (grid.H - 1) * info.f + 1);
+    if (Ri.w <= 4096 && Ri.h <= 4096 && Ri.w * Ri.h <= 8e6) { f = info.f; R = Ri; }
+  }
+  if (R && info) z = await window30(info, R, true);
+  else {
+    const d = await detail();
+    f = d.f; R = nodeRange(bounds, f, d.w, d.h);
+    z = new Float32Array(R.w * R.h);
+    for (let r = 0; r < R.h; r++) for (let c = 0; c < R.w; c++) z[r * R.w + c] = d.z[(r + R.r0) * d.w + c + R.c0];
+  }
+  const G = R, dxm = (grid.step / f) * geo.KX * 1000, dzm = (grid.step / f) * geo.KZ * 1000, out = new Uint8Array(G.w * G.h);
+  const nodes = ts.map(t => [Math.round(colOf(t.lon) * f) - G.c0, Math.round(rowOf(t.lat) * f) - G.r0]);
+  const zObs = ts.map((t, i) => ground[i] + Math.max(0, t.height));
+  ts.forEach((_, i) => viewshedRays(z, G.w, G.h, nodes[i][0], nodes[i][1], zObs[i], hRx, dxm, dzm, Rk * 1000, kR, out, 1 << i));
+  let pts: Viewshed['points'];
+  if (points) {
+    const n = points.lon.length, bits = new Uint8Array(n), lift = new Float32Array(n).fill(NaN), R2 = (Rk * 1000) ** 2;
+    for (let p = 0; p < n; p++) {
+      const px = colOf(points.lon[p]) * f - G.c0, py = rowOf(points.lat[p]) * f - G.r0;
+      if (px < 0 || py < 0 || px > G.w - 1 || py > G.h - 1) continue;
+      for (let i = 0; i < ts.length; i++) {
+        const [ox, oy] = nodes[i];
+        if (((px - ox) * dxm) ** 2 + ((py - oy) * dzm) ** 2 > R2) continue;
+        const l = losLift(z, G.w, G.h, ox, oy, zObs[i], px, py, hRx, dxm, dzm, kR);
+        if (Number.isNaN(l)) continue;
+        if (l <= 0) bits[p] |= 1 << i;
+        if (!(lift[p] <= l)) lift[p] = l;
+      }
+    }
+    pts = { bits, lift };
+  }
+  return {
+    grid: { width: G.w, height: G.h, bounds: boundsOf(G.c0, G.c1, G.r0, G.r1, f), res: Math.round(dxm), data: out },
+    sites: ts.map((_, i) => [lonOf((nodes[i][0] + G.c0) / f), latOf((nodes[i][1] + G.r0) / f), ground[i]]),
+    radiusKm: Rk,
+    points: pts,
+  };
+}
+
 /** Arreglos tipados del resultado (se transfieren en vez de copiarse). */
 function buffersOf(v: unknown, out: Transferable[] = []): Transferable[] {
   if (ArrayBuffer.isView(v)) out.push(v.buffer as ArrayBuffer);
@@ -419,6 +497,7 @@ ctx.onmessage = async ({ data: m }) => {
         : m.op === 'grid' ? await gridQuery(a.kind, a.bounds, a.res ?? 90)
         : m.op === 'watershed' ? await watershed(a.lon, a.lat, a.snapM)
         : m.op === 'flood' ? await flood(a.lon, a.lat, a.mode, a.radiusKm, a.maxRise)
+        : m.op === 'viewshed' ? await viewshed(a.towers, a.receiver, a.radiusKm, a.k, a.points)
         : await flowPath(a.lon, a.lat, a.maxKm);
       ctx.postMessage({ type: 'result', id: m.id, value }, buffersOf(value));
     }

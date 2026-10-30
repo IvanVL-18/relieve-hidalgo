@@ -1,4 +1,4 @@
-import type { Flood, FlowPath, GridKind, Profile, TerrainApi, TerrainGrid, Watershed } from '../shared/terrain';
+import type { Flood, FlowPath, GridKind, Profile, TerrainApi, TerrainGrid, Tower, Viewshed, Watershed } from '../shared/terrain';
 import type { DetailResult, GridMeta, TerrainMessage, TerrainOp, TerrainRequest, TilePackInfo } from '../shared/types';
 
 export interface TerrainServiceOptions {
@@ -69,6 +69,10 @@ export class TerrainService implements TerrainApi {
   watershed(lon: number, lat: number, snapM?: number) { return this.query<Watershed>('watershed', { lon, lat, snapM }); }
   flowPath(lon: number, lat: number, maxKm?: number) { return this.query<FlowPath>('flowpath', { lon, lat, maxKm }); }
   flood(lon: number, lat: number, opts: { mode?: 'rio' | 'valle'; radiusKm?: number; maxRise?: number } = {}) { return this.query<Flood>('flood', { lon, lat, ...opts }); }
+  viewshed(towers: Tower[], opts: { receiver?: number; radiusKm?: number; k?: number; points?: { lon: ArrayLike<number>; lat: ArrayLike<number> } } = {}) {
+    const { points, ...rest } = opts;
+    return this.query<Viewshed>('viewshed', { towers, ...rest, points: points && { lon: Float32Array.from(points.lon), lat: Float32Array.from(points.lat) } });
+  }
 
   dispose() {
     this.closed = true;

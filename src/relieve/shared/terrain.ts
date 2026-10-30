@@ -66,6 +66,107 @@ export interface Flood {
   maxRise: number;
 }
 
+/** Torre para la zona visible: punto y altura de la antena sobre el suelo (m). */
+export interface Tower { lon: number; lat: number; height: number }
+
+/**
+ * Zona visible desde una o varias torres: línea de vista con un receptor a cierta altura sobre el suelo, con la
+ * curvatura de la Tierra y la refracción normal (radio efectivo k·R, k = 4/3). No es un modelo de propagación.
+ */
+export interface Viewshed {
+  /** bits 0–5: torres con línea de vista al nodo (bit k = torre k) · bit 7: dentro del radio de alguna torre */
+  grid: TerrainGrid;
+  /** por torre: lon y lat del nodo de la antena y elevación del suelo (m) */
+  sites: [number, number, number][];
+  radiusKm: number;
+  /** puntos pedidos (localidades): línea de vista revisada punto por punto */
+  points?: {
+    /** torres que lo ven (bits como en grid; 0 = ninguna o fuera del radio) */
+    bits: Uint8Array;
+    /** metros que le faltan a la antena más favorable para verlo (≤ 0 si ya lo ve; NaN fuera del radio o sin dato) */
+    lift: Float32Array;
+  };
+}
+
+/** Radio de la Tierra (m) para la curvatura de la línea de vista. */
+export const EARTH_R = 6371000;
+
+/** Altura bilineal en nodos fraccionarios; los nodos sin dato (≤ 0 o NaN) no cuentan. NaN si ninguno tiene dato. */
+export function bilinear(z: ArrayLike<number>, w: number, h: number, x: number, y: number) {
+  const x0 = Math.max(0, Math.min(w - 2, Math.floor(x))), y0 = Math.max(0, Math.min(h - 2, Math.floor(y)));
+  const fx = Math.min(1, Math.max(0, x - x0)), fy = Math.min(1, Math.max(0, y - y0)), i = y0 * w + x0;
+  const a = z[i], b = z[i + 1], c = z[i + w], d = z[i + w + 1];
+  if (a > 0 && b > 0 && c > 0 && d > 0) return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+  let s = 0, q = 0;
+  const add = (v: number, wt: number) => { if (v > 0 && wt > 0) { s += v * wt; q += wt; } };
+  add(a, (1 - fx) * (1 - fy)); add(b, fx * (1 - fy)); add(c, (1 - fx) * fy); add(d, fx * fy);
+  return q > 0 ? s / q : NaN;
+}
+
+/**
+ * Zona visible desde el nodo (oc, or) de una rejilla de alturas z (m; ≤ 0 o NaN = sin dato), con la antena a zObs m
+ * s. n. m. y el receptor a hRx m sobre el suelo. Rayos a cada nodo del borde del cuadro que encierra el radio (R2 de
+ * Franklin y Ray): a lo largo del rayo se lleva la mayor pendiente del terreno vista desde la antena y un nodo es
+ * visible si la recta antena-receptor pasa por encima. La curvatura de la Tierra baja cada punto d² / 2kR (kR = radio
+ * efectivo). Los nodos visibles a ≤ radiusM reciben `bit` en out; todos los del círculo, 128. dxm, dzm: m entre nodos.
+ */
+export function viewshedRays(z: ArrayLike<number>, w: number, h: number, oc: number, or: number, zObs: number, hRx: number,
+  dxm: number, dzm: number, radiusM: number, kR: number, out: Uint8Array, bit: number) {
+  const nx = Math.ceil(radiusM / dxm), ny = Math.ceil(radiusM / dzm), R2 = radiusM * radiusM, k2 = 1 / (2 * kR);
+  const c0 = Math.max(0, oc - nx), c1 = Math.min(w - 1, oc + nx), r0 = Math.max(0, or - ny), r1 = Math.min(h - 1, or + ny);
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) if (((c - oc) * dxm) ** 2 + ((r - or) * dzm) ** 2 <= R2) out[r * w + c] |= 128;
+  if (oc >= 0 && or >= 0 && oc < w && or < h) out[or * w + oc] |= bit;
+  const ray = (pc: number, pr: number) => {
+    const ddx = pc - oc, ddy = pr - or, steps = Math.max(Math.abs(ddx), Math.abs(ddy));
+    if (!steps) return;
+    const sx = ddx / steps, sy = ddy / steps, stepM = Math.hypot(sx * dxm, sy * dzm), alongX = Math.abs(ddx) >= Math.abs(ddy);
+    let maxT = -Infinity;
+    for (let i = 1; i <= steps; i++) {
+      const d = i * stepM;
+      if (d > radiusM) break;
+      // en el eje mayor el rayo cae justo en un nodo; en el otro se interpola entre los dos vecinos
+      let a: number, b: number, f: number, node: number;
+      if (alongX) {
+        const x = oc + sx * i, y = or + sy * i, y0 = Math.floor(y);
+        f = y - y0; a = z[y0 * w + x]; b = f > 1e-9 ? z[(y0 + 1) * w + x] : a;
+        node = (f < 0.5 ? y0 : y0 + 1) * w + x;
+      } else {
+        const y = or + sy * i, x = oc + sx * i, x0 = Math.floor(x);
+        f = x - x0; a = z[y * w + x0]; b = f > 1e-9 ? z[y * w + x0 + 1] : a;
+        node = y * w + (f < 0.5 ? x0 : x0 + 1);
+      }
+      const ze = a > 0 ? (b > 0 ? a + (b - a) * f : a) : b;
+      if (!(ze > 0)) continue;
+      const drop = d * d * k2, t = (ze - drop - zObs) / d;
+      if ((ze + hRx - drop - zObs) / d >= maxT) out[node] |= bit;
+      if (t > maxT) maxT = t;
+    }
+  };
+  for (let c = c0; c <= c1; c++) { ray(c, r0); ray(c, r1); }
+  for (let r = r0 + 1; r < r1; r++) { ray(c0, r); ray(c1, r); }
+}
+
+/**
+ * Línea de vista exacta de la antena (nodo ox, oy; zObs m s. n. m.) a un punto (px, py en nodos fraccionarios) con el
+ * receptor a hRx m sobre el suelo: una muestra por nodo, bilineal, y la curvatura como abultamiento d·(D − d) / 2kR.
+ * Devuelve los metros que le faltan a la antena para ver el punto (≤ 0 si ya lo ve; NaN si el punto no tiene dato).
+ */
+export function losLift(z: ArrayLike<number>, w: number, h: number, ox: number, oy: number, zObs: number, px: number, py: number,
+  hRx: number, dxm: number, dzm: number, kR: number) {
+  const zp = bilinear(z, w, h, px, py);
+  if (!(zp > 0)) return NaN;
+  const D = Math.hypot((px - ox) * dxm, (py - oy) * dzm), n = Math.ceil(Math.max(Math.abs(px - ox), Math.abs(py - oy))), zR = zp + hRx;
+  let need = -Infinity;
+  for (let i = 1; i < n; i++) {
+    const t = i / n, zt = bilinear(z, w, h, ox + (px - ox) * t, oy + (py - oy) * t);
+    if (!(zt > 0)) continue;
+    // altura de antena con la que la recta hacia el receptor pasa justo por esta muestra
+    const req = (zt + (t * D * (D - t * D)) / (2 * kR) - zR * t) / (1 - t);
+    if (req > need) need = req;
+  }
+  return need - zObs;
+}
+
 /** Vecinos D8 [dfila, dcolumna] en el orden de los códigos de dirección 0–7 (los de scripts/pipeline/hidro.mjs). */
 export const D8 = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]] as const;
 
@@ -302,4 +403,10 @@ export interface TerrainApi {
    * ≤ 150 m)
    */
   flood(lon: number, lat: number, opts?: { mode?: 'rio' | 'valle'; radiusKm?: number; maxRise?: number }): Promise<Flood>;
+  /**
+   * zona visible desde hasta 6 torres con el receptor a `receiver` m sobre el suelo (1.5 por omisión), en un radio de
+   * radiusKm (20; máx. 60) y con refracción k (4/3): a 30 m si la zona cabe (≈ 8 millones de nodos), si no a 90 m.
+   * points: además, la línea de vista revisada a cada punto (localidades)
+   */
+  viewshed(towers: Tower[], opts?: { receiver?: number; radiusKm?: number; k?: number; points?: { lon: ArrayLike<number>; lat: ArrayLike<number> } }): Promise<Viewshed>;
 }

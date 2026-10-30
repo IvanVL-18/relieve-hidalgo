@@ -6,6 +6,9 @@ export const BBOX = { s: LAT1 - pad, w: LON0 - pad, n: LAT0 + pad, e: LON1 + pad
 
 export const SOURCES = {
   iter: { url: 'https://www.inegi.org.mx/contenidos/programas/ccpv/2020/datosabiertos/iter/iter_13_cpv2020_csv.zip', file: 'iter/iter_13_cpv2020_csv.zip', fuente: 'INEGI, Censo de Población y Vivienda 2020, ITER', licencia: 'Términos de libre uso de la información del INEGI' },
+  // muestra del censo (cuestionario ampliado): municipio de trabajo y de escuela de cada persona, con su factor de expansión
+  muestra: { url: 'https://www.inegi.org.mx/contenidos/programas/ccpv/2020/microdatos/Censo2020_CA_hgo_csv.zip', file: 'inegi/Censo2020_CA_hgo_csv.zip', fuente: 'INEGI, Censo de Población y Vivienda 2020, microdatos de la muestra (cuestionario ampliado), Hidalgo', licencia: 'Términos de libre uso de la información del INEGI' },
+  muestra_dic: { url: 'https://www.inegi.org.mx/contenidos/programas/ccpv/2020/microdatos/diccionario_cuestionario_ampliado_cpv2020.xlsx', file: 'inegi/diccionario_cuestionario_ampliado_cpv2020.xlsx', fuente: 'INEGI, Censo 2020, diccionario de datos del cuestionario ampliado', licencia: 'Términos de libre uso de la información del INEGI' },
   denue: { url: 'https://www.inegi.org.mx/contenidos/masiva/denue/denue_13_csv.zip', file: 'denue/denue_13_csv.zip', fuente: 'INEGI, Directorio Estadístico Nacional de Unidades Económicas (DENUE)', licencia: 'Términos de libre uso de la información del INEGI' },
   // una consulta por municipio ({mun} = 001 … 084): todas las localidades activas, también las que el ITER agrupa
   catalogo: { url: 'https://gaia.inegi.org.mx/wscatgeo/v2/localidades/13{mun}', file: 'inegi/localidades/13{mun}.json', fuente: 'INEGI, Catálogo Único de Claves de Áreas Geoestadísticas Estatales, Municipales y Localidades (servicio wscatgeo)', licencia: 'Términos de libre uso de la información del INEGI' },
@@ -45,6 +48,18 @@ export const SOURCES = {
     url: 'http://servicios2.cenapred.unam.mx:6080/arcgis/rest/services', file: 'cenapred/',
     historicos: ['AtlasEstatales/MapaHidalgo/MapServer/141', 'AtlasEstatales/MapaHidalgo/MapServer/142'], zonas: 'AtlasEstatales/MapaHidalgo/MapServer/139',
     fuente: 'CENAPRED, Atlas Nacional de Riesgos: Atlas Estatal de Hidalgo, inestabilidad de laderas (deslizamientos registrados en 2008 y 2009 y zonificación)', licencia: 'Información pública del Gobierno de México (citar al CENAPRED)',
+  },
+  // radiación solar. Nivel del año: Global Solar Atlas 2.0 (Solargis, 1999–2018, 9″ ≈ 270 m; el zip de México trae la
+  // global y la difusa anuales, y mensual solo la producción FV). Reparto en los meses: climatología 2001–2025 de NASA
+  // POWER (CERES SYN1deg, celdas de 1°), global y difusa; la API regional acepta un parámetro por consulta ({p})
+  atlas_solar: {
+    url: 'https://api.globalsolaratlas.info/download/Mexico/Mexico_GISdata_LTAym_AvgDailyTotals_GlobalSolarAtlas-v2_AAIGRID.zip', file: 'solargis/Mexico_LTAym_AvgDailyTotals_AAIGRID.zip',
+    fuente: 'Global Solar Atlas 2.0 (World Bank Group, ESMAP; datos © 2019 Solargis): radiación global y difusa horizontal, promedio 1999–2018', licencia: 'CC BY 4.0 (con la cláusula de mediación de Solargis)',
+  },
+  solar: {
+    url: 'https://power.larc.nasa.gov/api/temporal/climatology/regional?parameters={p}&community=RE&longitude-min=-100.5&longitude-max=-97.5&latitude-min=19.5&latitude-max=21.5&format=JSON',
+    file: 'nasa/power_{p}.json', parametros: ['ALLSKY_SFC_SW_DWN', 'ALLSKY_SFC_SW_DIFF'],
+    fuente: 'NASA Langley Research Center, POWER Project (Prediction Of Worldwide Energy Resources): climatología mensual 2001–2025 de radiación solar en superficie (CERES SYN1deg, 1°)', licencia: 'Datos abiertos de la NASA (citar al proyecto POWER)',
   },
   // deslizamientos registrados (precisión de kilómetros): referencia para el análisis de laderas
   deslizamientos: { url: 'https://data.nasa.gov/docs/legacy/Global_Landslide_Catalog_Export/Global_Landslide_Catalog_Export_rows.csv', file: 'nasa/glc.csv', fuente: 'NASA, Global Landslide Catalog (Kirschbaum et al.)', licencia: 'Datos abiertos de la NASA' },

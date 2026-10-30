@@ -1,3 +1,4 @@
+import type { SolarClimate } from '../shared/solar';
 import type { TerrainApi } from '../shared/terrain';
 import type { Meta } from '../shared/types';
 import { fetchBin } from '../worker/decode';
@@ -114,6 +115,42 @@ export interface Laderas {
   eventos: { fecha: string; lugar: string; lon: number; lat: number; precision: string; muertes: number }[];
   /** zonas de peligro por deslizamiento del atlas estatal (anillos lon/lat) */
   zonas: [number, number][][];
+}
+
+/** Potencial solar a ≈ 90 m (nodos de la rejilla de factor f): radiación anual sobre el terreno (modelo de shared/solar.ts). */
+export interface Solar {
+  w: number; h: number; f: number;
+  /** (kWh/m²·año − q.offset) / q.step por nodo; 0 = sin dato */
+  e: Uint8Array;
+  q: { offset: number; step: number };
+  /** cortes de las clases (kWh/m²·año) */
+  clases: number[];
+  clima: SolarClimate;
+  periodos: { atlas: string; meses: string };
+  estado: { media: number; p5: number; p50: number; p95: number; min: number; max: number };
+  /** media sobre el terreno, global de lo plano (sin relieve), mínimo, máximo y km² por clase */
+  municipios: { id: number; media: number; plano: number; min: number; max: number; km2: number[] }[];
+}
+
+/** Traslados de un tipo por municipio de residencia (muestra del Censo 2020, personas estimadas con el factor de expansión). */
+export interface Traslados {
+  /** total; en su municipio; a otro de Hidalgo; a otro estado; al extranjero; sin especificar; registros de la muestra */
+  total: number; mismo: number; hgo: number; fuera: number; ext: number; ne: number; n: number;
+  /** tiempo de traslado: índice = clave del censo (1 ≤ 15 min … 5 > 2 h, 6 no se puede saber, 7 no se traslada; 0 y 9 sin dato) */
+  tiempo: number[];
+  /** medio principal: índice = clave del censo (1 caminando … 12 otro; 0 sin dato) */
+  medio: number[];
+}
+
+/** Movilidad cotidiana al trabajo y a la escuela: lugares, flujos [origen 0–83, lugar, personas, registros] y resúmenes. */
+export interface Movilidad {
+  fuente: string;
+  /** 0–83 = municipios de Hidalgo (en su localidad más poblada); después, destinos de fuera */
+  lugares: { clave: string; nombre: string; lon: number; lat: number; ent: number; en?: string }[];
+  flujos: Record<'trabajo' | 'escuela', [number, number, number, number][]>;
+  /** personas con destino sin lugar en el mapa (municipio del Estado de México sin especificar o con pocos traslados) */
+  sinLugar: Record<'trabajo' | 'escuela', { edomex: number; otros: number }>;
+  municipios: Record<'trabajo' | 'escuela', Traslados[]>;
 }
 
 export const GRADOS = ['Sin dato', 'Muy bajo', 'Bajo', 'Medio', 'Alto', 'Muy alto'];
@@ -233,6 +270,19 @@ export function createDatasets(resolve: ResolveUrl, meta: Meta, terrain?: () => 
       const p0 = r.arr(Uint8Array, w * h), p1 = r.arr(Uint8Array, w * h), p2 = r.arr(Uint8Array, w * h);
       return { ...info, w, h, f: Math.round(w / (meta.W - 1)), p0, p1, p2, clase: p0.map(v => v & 7), zona: p2.map(v => (v >> 3) & 1) } as Laderas;
     }),
+    /** radiación solar anual sobre el terreno a 90 m y el clima con que se calculó (Global Solar Atlas y NASA POWER) */
+    solar: () => once('solar', async () => {
+      const [bin, info] = await Promise.all([
+        fetchBin(resolve('capas/solar.bin', new URL('../data/capas/solar.bin', import.meta.url).href)),
+        json<Omit<Solar, 'w' | 'h' | 'f' | 'e'>>(resolve('capas/solar.json', new URL('../data/capas/solar.json', import.meta.url).href)),
+      ]);
+      const r = new BinReader(bin);
+      r.magic(0x31454852, 'solar.bin');
+      const w = r.u32(), h = r.u32(), f = r.u32();
+      return { ...info, w, h, f, e: r.arr(Uint8Array, w * h) } as Solar;
+    }),
+    /** traslados al trabajo y a la escuela entre municipios (muestra del Censo 2020) */
+    movilidad: () => once('movilidad', () => json<Movilidad>(resolve('capas/movilidad.json', new URL('../data/capas/movilidad.json', import.meta.url).href))),
     /** pendiente a 30 m resumida por nodo del visor (media, % > 15° y > 30°) */
     pendiente: () => once('pendiente', async () => decodePendiente(await fetchBin(resolve('capas/pendiente.bin', new URL('../data/capas/pendiente.bin', import.meta.url).href)))),
     /** nombres de los ríos de OSM sobre el cauce calculado a 90 m (ríos de una cuenca, camino del agua) */

@@ -48,9 +48,11 @@ que se puede incrustar en cualquier sitio React.
 | Laderas inestables | Susceptibilidad a deslizamientos por pendiente (30 m), lluvia intensa, tipo de roca y cobertura vegetal, con el desglose de puntos de cada lugar, localidades y carreteras expuestas, comparación con el atlas estatal del CENAPRED y validación con los deslizamientos registrados |
 | Cambio de uso de suelo | Series VI (2014) y VII (2018) de INEGI: pérdida de bosque, urbanización, degradación y recuperación, con matriz de cambio por municipio y cortina para comparar |
 | Perfil de elevación | Corte del terreno entre dos o más puntos, en línea recta o por carretera: gráfica distancia–altura con la pendiente por tramos, subida y bajada acumuladas, punto más alto, municipios que cruza y tiempo por carretera; exporta CSV y PNG |
+| Potencial solar | Radiación del Sol que recibe cada ladera al año (o comparada con un terreno plano), según el clima, la pendiente, la orientación y lo que tapan los cerros; los meses de cualquier punto, el sol que le quita el horizonte y lo que daría un panel solar ahí; cifras por municipio |
+| Movilidad | Arcos 3D de quienes viajan a diario a trabajar o estudiar a otro municipio, al valle de México u otros estados (muestra del Censo 2020): adónde va la gente de cada municipio, de dónde llega, cuánto tarda y en qué |
+| Cobertura de antenas | Hasta seis torres en los cerros: zona con línea de vista desde la antena (o las zonas de sombra), localidades y habitantes con y sin ella, cuánto más alta tendría que ser la antena para llegar a las que faltan, y el perfil de la línea de vista a cualquier localidad |
 
-El menú también muestra los análisis planeados («Próximamente»): antenas,
-potencial solar, movilidad, recorridos guiados, impresión 3D y más. Las piezas que necesitan ya están en la base: capas
+El menú también muestra los análisis planeados («Próximamente»): recorridos guiados, impresión 3D y más. Las piezas que necesitan ya están en la base: capas
 raster con su propia cobertura y paleta, cortina para comparar, y consultas de elevación, pendiente, cuencas y camino
 del agua (ver «Agregar un análisis»).
 
@@ -128,10 +130,11 @@ el paquete se descarga completo una vez y todo sigue funcionando.
 
 1. Crea `src/relieve/analyses/<id>/<Nombre>.tsx`, un componente que recibe `{ ctx }`.
 2. Dibuja con `ctx.map`: colores por municipio, capas raster (`addRaster`: tu propia cobertura, resolución y paleta,
-   con `valueAt` para consultar el valor), puntos, columnas, líneas, cortina para comparar (`compare`), clics y ficha
-   del cursor. Todo lo que crea se borra solo al cerrar el análisis, así no afecta a los demás.
+   con `valueAt` para consultar el valor), puntos, columnas, líneas, arcos 3D de origen a destino (`addArcs`), cortina para
+   comparar (`compare`), clics y ficha del cursor. Todo lo que crea se borra solo al cerrar el análisis, así no afecta a los demás.
 3. Si necesitas el relieve, pídelo a `ctx.data.terrain()`: elevación de puntos, perfiles, rejillas de elevación,
-   pendiente, orientación o área drenada, cuenca de un punto y camino del agua (30 m donde hay teselas, si no 90 m).
+   pendiente, orientación o área drenada, cuenca de un punto, camino del agua, inundación y zona visible desde torres
+   (30 m donde hay teselas, si no 90 m).
 4. Regístralo en `src/relieve/analyses/registry.ts`.
 5. Para que lo que elige el usuario viaje en los enlaces, usa `useLinked` en lugar de `useState`:
    `const [vista, setVista] = useLinked(ctx.link, 'vista', 'indice', oneOf('indice', 'atlas'))`.
@@ -168,8 +171,8 @@ npm run visual              # las vuelve a capturar y marca en rojo lo que cambi
 Las referencias visuales dependen de la tarjeta gráfica: se comparan en el mismo equipo.
 
 La base de datos (esquema `relieve`) tiene municipios, localidades con minutos al servicio más cercano, servicios,
-lugares (localidades fuera del censo y colonias), uso de suelo (Series VII y VI), la red de ríos con orden de Strahler, deslizamientos registrados y
-susceptibilidad de laderas por municipio, la red vial como grafo y vistas para consultas frecuentes. El mapa
+lugares (localidades fuera del censo y colonias), uso de suelo (Series VII y VI), la red de ríos con orden de Strahler, deslizamientos registrados,
+susceptibilidad de laderas y radiación solar por municipio, traslados al trabajo y a la escuela entre municipios, la red vial como grafo y vistas para consultas frecuentes. El mapa
 no la necesita: lee archivos estáticos comprimidos. La base es para consultas, análisis y la API del laboratorio.
 
 ### Fuentes y licencias
@@ -185,6 +188,9 @@ no la necesita: lee archivos estáticos comprimidos. La base es para consultas, 
 | Tipo de roca (laderas) | INEGI, geología 1:250 000 serie I (vía IDEFOR, CONAFOR) | Términos de libre uso del INEGI |
 | Deslizamientos y zonas de peligro | CENAPRED, Atlas Nacional de Riesgos: atlas estatal de Hidalgo | Información pública del Gobierno de México |
 | Deslizamientos registrados | NASA, Global Landslide Catalog | Datos abiertos de la NASA |
+| Radiación solar (nivel del año) | Global Solar Atlas 2.0 (Banco Mundial, ESMAP; datos © 2019 Solargis), global y difusa 1999–2018 | CC BY 4.0 (con la cláusula de mediación de Solargis) |
+| Radiación solar (reparto en los meses) | NASA, proyecto POWER (CERES SYN1deg), climatología 2001–2025 | Datos abiertos de la NASA (citar a POWER) |
+| Traslados al trabajo y a la escuela | INEGI, Censo de Población y Vivienda 2020, microdatos de la muestra (cuestionario ampliado) | Términos de libre uso del INEGI |
 | Población, localidades y luces nocturnas | INEGI, Censo de Población y Vivienda 2020 (ITER) | Términos de libre uso del INEGI |
 | Localidades que el censo agrupa o no tienen habitantes | INEGI, Catálogo Único de Claves de Áreas Geoestadísticas (servicio web) | Términos de libre uso del INEGI |
 | Colonias, fraccionamientos y barrios (buscador) | INEGI, DENUE: asentamiento de cada dirección, en la mediana de sus negocios | Términos de libre uso del INEGI |
@@ -226,6 +232,15 @@ Estas atribuciones aparecen en el mapa y en la imagen descargable, y deben conse
 - El **perfil** usa el relieve de 30 m: en puentes, túneles y cortes no ve la obra (el perfil baja a la barranca o sube
   a la loma), y por carretera la pendiente de 100 m en 100 m puede salir mayor que la de la vía, que va cortada en la
   ladera. La subida acumulada ignora vaivenes de menos de 3 m para no contar el ruido del relieve.
+- La **cobertura de antenas** es línea de vista sobre el relieve de 30 m (con la curvatura de la Tierra y la refracción
+  normal), no un modelo de propagación: no toma en cuenta la frecuencia, la potencia, la zona de Fresnel, los árboles
+  ni los edificios. Sirve para ver qué tapa el relieve, no para prometer señal.
+- La **movilidad** sale de la muestra del censo (estimaciones con factor de expansión): los flujos con menos de 20 registros son
+  imprecisos y se ocultan si no se piden. Solo cuenta a quienes viven en Hidalgo (no a quien viene de otro estado a trabajar aquí);
+  la Ciudad de México va como un solo lugar porque la mitad no dijo la alcaldía.
+- El **potencial solar** es el promedio de muchos años sobre el relieve de 90 m: no ve árboles ni edificios, y un año nublado da
+  menos. El clima viene del Global Solar Atlas suavizado a ~5 km; en lo plano coincide con el Atlas a ±1 % y un panel a la inclinación
+  óptima sale 1–2.5 % abajo de lo que da el Atlas. Lo que daría un panel es una estimación sencilla (rendimiento de 80 %).
 - Las **nubes** simuladas sirven para ver el relieve con distintos cielos, no son un pronóstico: se reparten según la
   lluvia media anual y la hora, no según el tiempo de hoy.
 - Las **nubes de hoy** están donde el satélite las ve, pero su forma en 3D es una reconstrucción: la altura de la cima

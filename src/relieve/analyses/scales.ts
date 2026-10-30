@@ -14,6 +14,13 @@ export const SLOPE_BREAKS = [5, 10, 20, 40];
 export const SLOPE_LABELS = ['< 5 %', '5–10 %', '10–20 %', '20–40 %', '> 40 %'];
 /** profundidad del agua: claro = poca, oscuro = mucha (sobre el terreno, no sobre el panel) */
 export const DEPTH_RAMP = ['#cfeafc', '#86c5f0', '#4597dc', '#2266b8', '#163f80'];
+/** antenas: zona visible desde 1, 2 y 3 o más torres; sin línea de vista en naranja (localidades y vista de sombra) */
+export const VIEW_RAMP = ['#1e8f86', '#3fbfb2', '#8fe6dc'];
+export const NOVIEW = '#d95926';
+/** radiación solar anual: oscuro = poca, claro = mucha (dorado) */
+export const SUN_RAMP = ['#5c4813', '#86691a', '#b18b1f', '#dcae24', '#f5cf5a', '#fde79c'];
+/** radiación comparada con lo plano: azul = menos (laderas al norte), gris = igual, naranja = más (laderas al sur) */
+export const SUN_DIVERGING = ['#86b6ef', '#3987e5', '#1c5cab', '#383835', '#b5651d', '#e8913a', '#f5c27a'];
 
 /**
  * Matriz bivariada 3 × 3 (Stevens): columnas = pendiente (baja → alta, hacia cian),

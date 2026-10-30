@@ -1118,6 +1118,7 @@ export class ReliefEngine {
       setOverlay: (img, opacity) => { overlay = !!img; this.setOverlay(img, opacity); },
       addPoints: spec => track(ov().addPoints(spec)),
       addLines: spec => track(ov().addLines(spec)),
+      addArcs: spec => track(ov().addArcs(spec)),
       addRaster: spec => track(rs().add(spec)),
       compare: spec => track(this.compare(spec)),
       flyTo: (lon, lat, km) => this.flyToLonLat(lon, lat, km),

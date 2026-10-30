@@ -425,6 +425,11 @@
 .rh-a-ptop circle { fill: var(--rh-fg); stroke: #0e121a; stroke-width: 2; }
 .rh-a-profile .rh-a-ptop text { fill: var(--rh-fg); }
 .rh-a-pcross line { stroke: rgba(238, 241, 245, 0.55); stroke-width: 1; }
+.rh-a-gradient { height: 8px; border-radius: 2px; margin-top: 4px; }
+.rh-a-gradticks { display: flex; justify-content: space-between; font-size: 0.58rem; margin-top: 2px; }
+.rh-a-keyrow { display: inline-flex; align-items: center; gap: 4px; }
+.rh-a-keyrow i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
+.rh-a-keyrow i.rh-a-keyline { height: 2px; width: 10px; margin-left: 6px; }
 .rh-a-pcross circle { stroke: #0e121a; stroke-width: 2; }
 .rh-a-tip {
   position: absolute; transform: translate(-50%, calc(-100% - 10px)); pointer-events: none; white-space: nowrap;
