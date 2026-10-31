@@ -13,7 +13,60 @@ float rhFbm(vec2 p) {
   float s = 0.0, a = 0.5;
   for (int k = 0; k < 4; k++) { s += a * rhNoise(p); p = p * 2.03 + 17.1; a *= 0.5; }
   return s / 0.9375;
+}
+// ruido de valor con sus derivadas: (valor, d/dx, d/dy)
+vec3 rhNoised(vec2 p) {
+  vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f), du = 6.0 * f * (1.0 - f);
+  float a = rhHash(i), b = rhHash(i + vec2(1.0, 0.0)), c = rhHash(i + vec2(0.0, 1.0)), d = rhHash(i + vec2(1.0, 1.0));
+  return vec3(a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y, du * (vec2(b - a, c - a) + (a - b - c + d) * u.yx));
 }`;
+
+/**
+ * La sombra del Sol en el relieve: con RH_RAYSHADOW, la trazada sobre la superficie (rhRayVis) en vez del mapa de sombras
+ * de 270 m. Sin él la macro deja la llamada de three tal cual (el sombreador sale igual que antes).
+ */
+const SUN_SHADOW_CALL = 'getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowIntensity, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] )';
+const LIGHTS_BEGIN = THREE.ShaderChunk.lights_fragment_begin.replace(SUN_SHADOW_CALL, `RH_SUN_SHADOW( ${SUN_SHADOW_CALL} )`);
+if (!LIGHTS_BEGIN.includes('RH_SUN_SHADOW')) console.warn('Relieve de Hidalgo: three cambió la sombra direccional; las sombras trazadas no se aplicarán.');
+
+/**
+ * Sombras trazadas sobre el relieve (fragmentos; necesita HEIGHT_GLSL): rhRayShadowAt(g, h, fine) = fracción del disco solar
+ * que se ve desde el punto g (celdas) a h m (sin exagerar). El rayo hacia el Sol avanza con pasos que crecen y guarda el menor
+ * ángulo libre sobre el relieve; la exageración ya está en la subida del rayo (uRayL.z) y en la penumbra (uRayP.x).
+ */
+const RAY_GLSL = /* glsl */ `
+#ifdef RH_RAYSHADOW
+uniform vec3 uRayL; uniform vec3 uRayP; uniform float uFrame;
+#define RH_SUN_SHADOW(s) rhRayVis
+// altura del relieve a d km sobre el rayo: cerca, la superficie que se dibuja (con el relieve de 30 m); más lejos, la de
+// 90 m; y solo la de 270 m si un píxel abarca más de media celda (su detalle no se vería y parpadearía)
+float rhRayH(vec2 g, float d, bool fine) {
+  // (una sola salida: el compilador de Direct3D avisa de variables sin iniciar con varias)
+  float h0 = rhH0(g), h = h0;
+  #ifdef RH_TILES
+  if (fine && d < 2.0) h = rhSurfaceAt(g, h0, rhDistE(g, h0));
+  #endif
+  #ifdef RH_DETAIL
+  if (fine && d >= 2.0 && d < 30.0 && uH1On > 0.0) { float lo = 0.0; float h1 = rhBilinear(tH1, g * 3.0, lo); if (lo > 0.0) h = mix(h0, h1, uH1On); }
+  #endif
+  return h;
+}
+float rhRayShadowAt(vec2 g, float h0, bool fine) {
+  if (uRayL.z <= 0.0) return 1.0;
+  float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + uFrame * 0.618034);
+  float d = (fine ? 0.03 : 0.3) * (1.0 + 0.6 * jit), k = 1.0, h = h0 + 1.5;
+  for (int i = 0; i < RH_RAYSHADOW; i++) {
+    float hr = h + d * 1000.0 * uRayL.z;
+    if (hr > uRayP.y) break;
+    k = min(k, (hr - rhRayH(g + uRayL.xy * d, d, fine)) / (d * 1000.0));
+    if (k < -uRayP.x) break;
+    d *= uRayP.z;
+  }
+  return smoothstep(-uRayP.x, uRayP.x, k);
+}
+#else
+#define RH_SUN_SHADOW(s) (s)
+#endif`;
 
 /** Bruma por distancia, relativa a la distancia de la cámara a su objetivo: solo se nota al volar bajo. */
 const HAZE_PARS = /* glsl */ `uniform vec3 uHazeColor; uniform float uHazeAmt; uniform float uHazeRef;`;
@@ -25,6 +78,8 @@ export function makeSharedUniforms() {
   return {
     uTime: { value: 0 },
     uNight: { value: 0 },
+    /** cuadro que se acumula en reposo (Alta y Máxima; 0 = el normal): cambia el azar de las sombras trazadas */
+    uFrame: { value: 0 },
     /** sRGB de salida: se mezcla después de la conversión de color */
     uHazeColor: { value: new THREE.Vector3(0.66, 0.73, 0.8) },
     uHazeAmt: { value: 0.45 },
@@ -109,6 +164,17 @@ export function makeTerrainUniforms(shared: SharedUniforms, hu: HeightUniforms, 
     uWaterDeep: { value: new THREE.Color('#1b4a63') },
     uSkyRefl: { value: new THREE.Color('#9fc3dc') },
     uCityLight: { value: new THREE.Color('#ffb35c').multiplyScalar(1.15) },
+    /**
+     * sombras trazadas (RH_RAYSHADOW): xy = hacia el Sol en celdas de la rejilla por km, z = subida del rayo en km por km
+     * sin exagerar (0 = sin Sol); penumbra (tangente, sin exagerar), altura máxima del relieve (m) y crecimiento del paso
+     */
+    uRayL: { value: new THREE.Vector3() },
+    uRayP: { value: new THREE.Vector3(0.004, 3500, 1.24) },
+    /** agua con reflejos (RH_WATER2): cielo en el horizonte y en el cenit, halo del Sol (lineales) y dirección del Sol (mundo) */
+    uSkyHorizon: { value: new THREE.Color(0.5, 0.6, 0.7) },
+    uSkyZenith: { value: new THREE.Color(0.15, 0.3, 0.55) },
+    uSkySun: { value: new THREE.Color(1, 0.9, 0.7) },
+    uSunW: { value: new THREE.Vector3(0, 1, 0) },
   };
 }
 export type TerrainUniforms = ReturnType<typeof makeTerrainUniforms>;
@@ -123,13 +189,19 @@ const PATCH_VERTEX = /* glsl */ `
   g -= fract(gp * 0.5) * 2.0 * aPatch.z * morph;
   h0 = rhH0(g);`;
 
-/** Material del relieve. Las capas raster (RH_RASTERS) y la cortina (RH_COMPARE) se cambian en mat.defines + needsUpdate. */
+/**
+ * Material del relieve. Las capas raster (RH_RASTERS), la cortina (RH_COMPARE) y, según la calidad de imagen, las sombras
+ * trazadas (RH_RAYSHADOW = pasos) y el agua con reflejos (RH_WATER2) se cambian en mat.defines + needsUpdate.
+ */
 export function createTerrainMaterial(u: TerrainUniforms, defines: Record<string, string>) {
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.94, metalness: 0 });
   // el recorte por el contorno da alfa < 1 en la orilla: con MSAA es cobertura; sin MSAA, el lienzo transparente la suaviza
   mat.alphaToCoverage = true;
   mat.defines = { ...defines, RH_RASTERS: '0' };
-  mat.customProgramCacheKey = () => `rh-terrain-${mat.defines!.RH_RASTERS}-${'RH_COMPARE' in mat.defines! ? 1 : 0}`;
+  mat.customProgramCacheKey = () => {
+    const d = mat.defines!;
+    return `rh-terrain-${d.RH_RASTERS}-${'RH_COMPARE' in d ? 1 : 0}-${d.RH_RAYSHADOW ?? 0}-${'RH_WATER2' in d ? 1 : 0}`;
+  };
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
@@ -177,13 +249,23 @@ export function createTerrainMaterial(u: TerrainUniforms, defines: Record<string
         #ifdef RH_DETAIL
         uniform sampler2D tDetail; uniform float uDetail; uniform vec2 uDetailSize; uniform vec2 uDetailEnc;
         #endif
-        #ifdef RH_TILES
+        #ifdef RH_RAYSHADOW
+        // las sombras trazadas leen la misma superficie que los vértices (mismos muestreadores: no gastan otra unidad)
+        ${HEIGHT_GLSL}
+        #elif defined(RH_TILES)
         uniform highp usampler2D tH2; uniform highp sampler2D tPages; uniform vec4 uPage2;
+        #endif
+        #ifdef RH_TILES
         uniform sampler2D tSatAtlas; uniform vec4 uSatPage; uniform float uSatSlot; uniform vec2 uSatAtlasSize;
         #endif
         ${HAZE_PARS}
         varying vec2 vWUv; varying vec2 vG; varying float vHM; varying vec2 vXZ;
         float rhWater; float rhDim; float rhGlow; float rhAOv; float rhGpp; vec3 rhNm;
+        #ifdef RH_WATER2
+        uniform vec3 uSkyHorizon; uniform vec3 uSkyZenith; uniform vec3 uSkySun; uniform vec3 uSunW;
+        // km de terreno por píxel (las ondas más chicas se apagan)
+        float rhFoot;
+        #endif
         ${NOISE}
         vec2 rhMuni2(ivec2 p) { return texelFetch(tMuni, clamp(p, ivec2(0), ivec2(uGrid)), 0).rg; }
         vec4 rhPal(float row, float i) { return textureLod(tPalette, vec2((i + 0.5) / 256.0, (row + 0.5) / ${PALETTE_ROWS}.0), 0.0); }
@@ -280,12 +362,21 @@ export function createTerrainMaterial(u: TerrainUniforms, defines: Record<string
           else if (par.w > 0.5) c = rhClasses(t, size, luv, row, rhGpp * map.y * size.x / uGridMax.x);
           else c = rhPal(row, floor(texelFetch(t, clamp(ivec2(luv * size), ivec2(0), ivec2(size) - 1), 0).r * 255.0 + 0.5));
           return vec4(c.rgb, c.a * par.y);
-        }`)
+        }
+        ${RAY_GLSL}
+        // la sombra trazada empieza en lo más alto entre la malla dibujada y el relieve en el punto (la malla se separa unos
+        // metros del relieve entre vértices)
+        #ifdef RH_RAYSHADOW
+        float rhRayShadow() { bool fine = rhGpp < 0.5; return rhRayShadowAt(vG, max(vHM, rhRayH(vG, 0.0, fine)), fine); }
+        #endif`)
       .replace('#include <color_fragment>', `
         // derivadas primero, fuera de ramas y antes de descartar
         rhGpp = max(max(fwidth(vG.x), fwidth(vG.y)), 1e-6);
         vec2 dUv = vec2(fwidth(vWUv.x), fwidth(vWUv.y));
         float dH = fwidth(vHM);
+        #ifdef RH_WATER2
+        rhFoot = max(length(dFdx(vXZ)), length(dFdy(vXZ)));
+        #endif
         // municipios (50 m) y contorno del estado: los 4 nodos vecinos
         vec2 tc = vWUv * uGrid, tf = fract(tc);
         ivec2 tb = ivec2(floor(tc));
@@ -366,21 +457,60 @@ export function createTerrainMaterial(u: TerrainUniforms, defines: Record<string
         rhDim = step(0.5, uSel) * (1.0 - sel);
         diffuseColor.a = clamp(0.5 - sd / sdAA, 0.0, 1.0);`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor = mix(roughnessFactor, 0.14, rhWater);`)
+        #ifdef RH_WATER2
+        // el rizado de centímetros que no se ve en un píxel ensancha el reflejo del Sol (Cox y Munk: pendientes de ~0.1–0.2
+        // con brisa); rachas de viento de varios km lo hacen más liso (destello fino) o más rizado (camino de destellos ancho)
+        roughnessFactor = mix(roughnessFactor, mix(0.2, 0.36, smoothstep(0.3, 0.75, rhFbm(vXZ / 2.6 + uTime * vec2(0.006, 0.0035)))), rhWater);
+        #else
+        roughnessFactor = mix(roughnessFactor, 0.14, rhWater);
+        #endif`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         // normal de la superficie (270 → 90 → 30 m, en escala real); normalMatrix le aplica la exageración vertical
         normal = normalize(normalMatrix * rhNm);
         if (rhWater > 0.0) {
           vec3 upView = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+          #ifdef RH_WATER2
+          // ondulación suave que solo se ve de cerca (dos octavas de 120 y 50 m que avanzan con el viento; se apagan cuando
+          // son más chicas que el píxel, para no centellear)
+          vec2 sl = vec2(0.0);
+          float lam = 0.12;
+          for (int k = 0; k < 2; k++) {
+            float fade = 1.0 - smoothstep(0.15, 0.4, rhFoot / lam);
+            vec2 dir = vec2(cos(float(k) * 2.4 + 0.5), sin(float(k) * 2.4 + 0.5));
+            sl += rhNoised(vXZ / lam + dir * uTime * 0.05 / sqrt(lam) + float(k) * 17.0).yz * 0.02 * fade;
+            lam *= 0.42;
+          }
+          vec3 wn = normalize((viewMatrix * vec4(-sl.x, 1.0, -sl.y, 0.0)).xyz);
+          normal = normalize(mix(normal, wn, rhWater));
+          #else
           vec2 q = vXZ * 2.2;
           vec3 rip = vec3(rhNoise(q + uTime * vec2(0.35, 0.1)) - 0.5, 0.0, rhNoise(q * 1.37 - uTime * vec2(0.12, 0.3) + 7.0) - 0.5);
           vec3 wn = normalize(upView + (viewMatrix * vec4(rip * 0.22, 0.0)).xyz);
           normal = normalize(mix(normal, wn, rhWater * 0.9));
+          #endif
         }`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         totalEmissiveRadiance += uCityLight * rhGlow * rhGlow * uNight * (1.0 - rhWater);
+        #ifdef RH_WATER2
+        {
+          // reflejo del cielo de esa hora (del horizonte al cenit, y el halo del Sol) según la dirección reflejada; mismo peso
+          // que en Normal para que el agua se siga leyendo igual
+          vec3 vv = normalize(vViewPosition);
+          vec3 rw = (vec4(reflect(-vv, normal), 0.0) * viewMatrix).xyz;
+          vec3 sky = mix(uSkyHorizon, uSkyZenith, sqrt(clamp(rw.y, 0.0, 1.0))) + uSkySun * pow(max(dot(rw, uSunW), 0.0), 6.0);
+          float fres = pow(1.0 - saturate(dot(normal, vv)), 4.0);
+          totalEmissiveRadiance += sky * (0.06 + 0.5 * fres) * rhWater;
+        }
+        #else
         float fres = pow(1.0 - saturate(dot(normal, normalize(vViewPosition))), 4.0);
-        totalEmissiveRadiance += uSkyRefl * (0.06 + 0.5 * fres) * rhWater * (1.0 - 0.85 * uNight);`)
+        totalEmissiveRadiance += uSkyRefl * (0.06 + 0.5 * fres) * rhWater * (1.0 - 0.85 * uNight);
+        #endif`)
+      // (función: el texto de three no debe leerse como patrones de reemplazo)
+      .replace('#include <lights_fragment_begin>', () => `
+        #ifdef RH_RAYSHADOW
+        float rhRayVis = rhRayShadow();
+        #endif
+        ${LIGHTS_BEGIN}`)
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
         // oclusión: apertura del cielo del relieve de 90 m si ya llegó, si no la aproximación de 270 m
         reflectedLight.indirectDiffuse *= rhAOv;
@@ -486,6 +616,76 @@ export function createWallMaterial(shared: SharedUniforms, hu: HeightUniforms, d
         c = mix(uSoil, c, smoothstep(0.015, 0.06, vTop - vY));
         c *= mix(0.22, 1.0, smoothstep(-1.4, 0.9, vY));
         diffuseColor.rgb = c;`)
+      .replace('#include <premultiplied_alpha_fragment>', `${HAZE}
+        #include <premultiplied_alpha_fragment>`);
+  };
+  return mat;
+}
+
+/**
+ * Edificios (engine/buildings.ts): prismas con su altura real sobre el relieve exagerado (la base, en la superficie que se
+ * dibuja bajo su centro; baja 8 m para cubrir la ladera), caras planas (flatShading) y colores por edificio: techos de losa
+ * gris, impermeabilizante rojo o blanco; fachadas claras o pintadas. Aparecen creciendo cerca del límite de su rango. Con
+ * sombras trazadas (RH_RAYSHADOW), la del relieve igual que el terreno; si no, el mapa de sombras.
+ */
+export function createBuildingMaterial(shared: SharedUniforms, hu: HeightUniforms, tu: TerrainUniforms, defines: Record<string, string>) {
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.86, metalness: 0, flatShading: true });
+  mat.defines = { ...defines };
+  const u = { ...shared, uBldRange: { value: 10 }, uRayL: tu.uRayL, uRayP: tu.uRayP };
+  // rango (km) en que aparecen: lo pone el motor según la calidad
+  mat.userData.range = u.uBldRange;
+  mat.customProgramCacheKey = () => `rh-bld-${mat.defines!.RH_RAYSHADOW ?? 0}`;
+  mat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, u);
+    withHeights(sh, hu);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute vec2 aCenter; attribute vec4 aInfo; uniform float uBldRange;
+        varying float vTop; varying float vRnd; varying vec2 vGb; varying float vHb;`)
+      .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3(0.0, 1.0, 0.0);')
+      .replace('#include <begin_vertex>', `
+        float hb = rhSurface(aCenter);
+        // crecen desde el suelo al entrar en el rango (sin saltos al aparecer)
+        float grow = 1.0 - smoothstep(uBldRange * 0.75, uBldRange, rhDistE(aCenter, hb));
+        float hTop = aInfo.x * 63.75 * grow;
+        // la escena está exagerada uEx veces en vertical: la altura del edificio se divide para que quede la real
+        float y = position.z > 0.5 ? hb + hTop / uEx : hb - 8.0 / uEx;
+        // fuera del rango, todo el edificio en un punto bajo el suelo (si no, su techo quedaría pintado en el terreno)
+        vec2 xz = rhXZ(grow > 0.0 ? position.xy : aCenter);
+        if (grow <= 0.0) y = hb - 8.0 / uEx;
+        vec3 transformed = vec3(xz.x, y * 0.001, xz.y);
+        vTop = position.z; vRnd = aInfo.y; vGb = position.xy; vHb = y;`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', () => `#include <common>
+        uniform float uNight;
+        varying float vTop; varying float vRnd; varying vec2 vGb; varying float vHb;
+        ${HAZE_PARS}
+        #ifdef RH_RAYSHADOW
+        ${HEIGHT_GLSL}
+        #endif
+        ${RAY_GLSL}`)
+      .replace('#include <color_fragment>', `
+        // techo: todo el triángulo en el anillo de arriba (las paredes solo tocan 1 en su orilla)
+        bool roof = vTop > 0.995;
+        float r = vRnd, r2 = fract(vRnd * 7.31 + 0.13);
+        vec3 c;
+        // losa gris la mayoría; blancos, beige, impermeabilizante rojo (apagado: de lejos un rojo puro domina) y algunos oscuros
+        if (roof) c = r < 0.46 ? vec3(0.64, 0.63, 0.6) : r < 0.66 ? vec3(0.84, 0.83, 0.8) : r < 0.76 ? vec3(0.74, 0.68, 0.58)
+          : r < 0.88 ? vec3(0.6, 0.36, 0.3) : vec3(0.42, 0.41, 0.39);
+        else c = r2 < 0.3 ? vec3(0.9, 0.88, 0.84) : r2 < 0.45 ? vec3(0.88, 0.8, 0.64) : r2 < 0.57 ? vec3(0.83, 0.63, 0.4) : r2 < 0.67 ? vec3(0.74, 0.46, 0.34)
+          : r2 < 0.76 ? vec3(0.86, 0.63, 0.6) : r2 < 0.84 ? vec3(0.62, 0.74, 0.82) : r2 < 0.92 ? vec3(0.68, 0.78, 0.6) : vec3(0.62, 0.62, 0.6);
+        c *= 0.9 + 0.2 * fract(r * 13.7);
+        // oscuro junto al suelo (la calle y los vecinos tapan el cielo)
+        if (!roof) c *= mix(0.5, 1.0, smoothstep(0.0, 0.75, vTop));
+        diffuseColor.rgb = pow(c, vec3(2.2));`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        // de noche, la luz de las ventanas en la mitad de las casas
+        if (!roof) totalEmissiveRadiance += vec3(1.0, 0.7, 0.4) * 0.12 * uNight * step(0.5, fract(r * 3.17)) * smoothstep(0.2, 0.5, vTop);`)
+      .replace('#include <lights_fragment_begin>', () => `
+        #ifdef RH_RAYSHADOW
+        float rhRayVis = rhRayShadowAt(vGb, vHb, true);
+        #endif
+        ${LIGHTS_BEGIN}`)
       .replace('#include <premultiplied_alpha_fragment>', `${HAZE}
         #include <premultiplied_alpha_fragment>`);
   };

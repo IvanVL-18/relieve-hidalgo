@@ -5,15 +5,18 @@ import { BASE_KM, makeGeo, type Geo } from '../shared/geo';
 import type { CloudSettings } from '../shared/clouds';
 import type { LiveCloudsStatus } from '../shared/goes';
 import type { View } from '../shared/enlaces';
+import { autoTier, gpuKind, gpuName, pixelRatio, qualityParams, type GpuKind, type QualityParams, type QualitySetting, type QualityTier } from '../shared/quality';
 import type { TerrainApi } from '../shared/terrain';
 import type { BuildRequest, BuildResult, DetailResult, LinesResult, Meta, TilePackInfo, WorkerMessage } from '../shared/types';
 import { ALT_STOPS_HEX } from '../worker/palette';
+import { Accumulator } from './accumulate';
+import { Buildings } from './buildings';
 import { Clouds } from './clouds';
 import { Heightfield, type Hit, type Tiles30 } from './heightfield';
 import { heightDefines, makeHeightUniforms, type HeightUniforms } from './heights';
 import { Labels } from './labels';
 import {
-  PALETTE_ROW, blankTexture, createCasterDepthMaterial, createNightPointsMaterial, createTerrainMaterial, createWallDepthMaterial, createWallMaterial,
+  PALETTE_ROW, blankTexture, createBuildingMaterial, createCasterDepthMaterial, createNightPointsMaterial, createTerrainMaterial, createWallDepthMaterial, createWallMaterial,
   makeSharedUniforms, makeTerrainUniforms, type SharedUniforms, type TerrainUniforms,
 } from './materials';
 import { BASE_MAPS, loadBaseMap, type BaseMapId, type LoadedBaseMap } from './basemaps';
@@ -29,7 +32,7 @@ import { TileSet } from './tiles';
 
 export const meta = metaJson as unknown as Meta;
 
-export type LayerKey = 'water' | 'places' | 'borders' | 'contours' | 'clouds';
+export type LayerKey = 'water' | 'places' | 'borders' | 'contours' | 'clouds' | 'buildings';
 export type Layers = Record<LayerKey, boolean>;
 export type { BaseMapId } from './basemaps';
 export { BASE_MAPS } from './basemaps';
@@ -82,10 +85,20 @@ export interface EngineElements {
   zoomRead?: HTMLElement | null;
 }
 
+/** Calidad de imagen: la elegida, el nivel en uso, el que convendría solo y la tarjeta gráfica (nombre legible y tipo). */
+export interface QualityInfo {
+  setting: QualitySetting;
+  tier: QualityTier;
+  auto: QualityTier;
+  gpu: string;
+  gpuKind: GpuKind;
+}
+
 export interface EngineOptions {
   /** carpeta con los archivos de data/ si se sirven desde otro lugar (CDN, Laravel /public…) */
   dataBaseUrl?: string;
-  quality?: 'auto' | 'high' | 'low';
+  /** calidad de imagen (auto = según la tarjeta gráfica); se cambia luego con setQuality */
+  quality?: QualitySetting;
   exaggeration: number;
   hour: number;
   layers: Layers;
@@ -117,10 +130,7 @@ export interface EngineOptions {
 
 const UNIT = 0.01;   // 1 unidad de escena = 100 km
 const ACCENT = '#ffcf7a';
-/** relieve fino: 90 m entero hasta 60 km de la cámara y nada desde 100; 30 m entero hasta 14 km y nada desde 24 */
-const LOD_BLEND = [60, 100, 14, 24] as const;
-/** atlas de teselas: 14 × 14 ranuras de relieve de 30 m (145 nodos) y 8 × 8 de imagen (256 px) */
-const DEM_SLOTS = 14, SAT_SLOTS = 8;
+// (las distancias del relieve fino y el tamaño de los atlas de teselas dependen de la calidad: shared/quality.ts)
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const smooth = (a: number, b: number, x: number) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const easeIO = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -136,20 +146,21 @@ function blankRG() {
   return t;
 }
 
-/** Color del cielo y de la bruma según la altura del Sol (grados). sRGB 0–1. */
-const SKY: [number, [number, number, number], [number, number, number]][] = [
-  [-12, [0.055, 0.086, 0.15], [0.047, 0.078, 0.14]],
-  [-4, [0.23, 0.23, 0.35], [0.16, 0.14, 0.25]],
-  [1.5, [0.83, 0.6, 0.45], [0.29, 0.18, 0.17]],
-  [9, [0.79, 0.73, 0.65], [0.17, 0.16, 0.2]],
-  [25, [0.68, 0.75, 0.81], [0.078, 0.106, 0.157]],
+type RGB = [number, number, number];
+/** Color de la bruma (el cielo en el horizonte), del resplandor de fondo y del cenit según la altura del Sol (grados). sRGB 0–1. */
+const SKY: [number, RGB, RGB, RGB][] = [
+  [-12, [0.055, 0.086, 0.15], [0.047, 0.078, 0.14], [0.02, 0.03, 0.07]],
+  [-4, [0.23, 0.23, 0.35], [0.16, 0.14, 0.25], [0.1, 0.12, 0.26]],
+  [1.5, [0.83, 0.6, 0.45], [0.29, 0.18, 0.17], [0.27, 0.33, 0.55]],
+  [9, [0.79, 0.73, 0.65], [0.17, 0.16, 0.2], [0.33, 0.48, 0.72]],
+  [25, [0.68, 0.75, 0.81], [0.078, 0.106, 0.157], [0.27, 0.47, 0.78]],
 ];
 function skyAt(elDeg: number) {
   let k = 1;
   while (k < SKY.length - 1 && elDeg > SKY[k][0]) k++;
-  const [e0, h0, g0] = SKY[k - 1], [e1, h1, g1] = SKY[k], t = clamp((elDeg - e0) / (e1 - e0), 0, 1);
-  const lerp = (a: number[], b: number[]) => a.map((v, i) => v + (b[i] - v) * t) as [number, number, number];
-  return { haze: lerp(h0, h1), glow: lerp(g0, g1) };
+  const [e0, h0, g0, z0] = SKY[k - 1], [e1, h1, g1, z1] = SKY[k], t = clamp((elDeg - e0) / (e1 - e0), 0, 1);
+  const lerp = (a: number[], b: number[]) => a.map((v, i) => v + (b[i] - v) * t) as RGB;
+  return { haze: lerp(h0, h1), glow: lerp(g0, g1), zenith: lerp(z0, z1) };
 }
 
 interface Fly { t0: number; ms: number; fromT: THREE.Vector3; toT: THREE.Vector3; fromS: THREE.Spherical; toS: THREE.Spherical; done?: (ok: boolean) => void }
@@ -166,9 +177,17 @@ export class ReliefEngine {
   private geo: Geo = makeGeo(meta);
   private worker: Worker | null = null;
   private disposed = false;
+  /** pantalla de celular */
   private small: boolean;
-  /** relieve fino (90 m) y teselas (30 m e imagen): solo en pantallas grandes y calidad no baja */
+  /** relieve fino (90 m) y teselas (30 m e imagen): salvo en calidad Básica (se decide al crear el motor) */
   private fineOn: boolean;
+  /** calidad de imagen: la elegida y los parámetros del nivel en uso; tarjeta gráfica y nivel que convendría solo */
+  private qSetting: QualitySetting;
+  private q: QualityParams;
+  private gpuRaw = '';
+  private autoQ: QualityTier;
+  /** antialias progresivo en reposo (Alta y Máxima) */
+  private acc: Accumulator | null = null;
   private reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   private renderer: THREE.WebGLRenderer;
@@ -212,6 +231,12 @@ export class ReliefEngine {
   private service: TerrainService | null = null;
   private demTiles: TileSet<Uint16Array> | null = null;
   private satTiles: TileSet<ImageBitmap> | null = null;
+  /** paquetes de teselas abiertos y texturas de sus atlas (se rehacen si la calidad cambia su tamaño) */
+  private packs: { dem: TilePackInfo | null; sat: TilePackInfo | null } | null = null;
+  private tileTex: THREE.Texture[] = [];
+  /** edificios (capas/edificios.bin) y su material */
+  private buildings: Buildings | null = null;
+  private bldMat: THREE.MeshStandardMaterial | null = null;
   private tiles30: Tiles30 | null = null;
   private tileDirty = true;
   private lastTiles = 0;
@@ -283,17 +308,22 @@ export class ReliefEngine {
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
   constructor(private el: EngineElements, private opts: EngineOptions) {
-    const q = opts.quality ?? 'auto';
-    this.small = q === 'low' || (q === 'auto' && Math.min(screen.width, screen.height) < 640);
-    this.fineOn = !this.small && q !== 'low';
+    this.small = Math.min(screen.width, screen.height) < 640;
     this.exTarget = opts.exaggeration;
     this.layers = { ...opts.layers };
     this.hour = opts.hour;
-    this.fullDpr = this.dpr = Math.min(devicePixelRatio || 1, this.small ? 1.6 : 2);
 
+    // MSAA como siempre: solo si la pantalla no tiene ya mucha densidad de píxeles
     const renderer = (this.renderer = new THREE.WebGLRenderer({
-      antialias: this.fullDpr < 1.75, alpha: true, powerPreference: 'high-performance',
+      antialias: Math.min(devicePixelRatio || 1, this.small ? 1.6 : 2) < 1.75, alpha: true, powerPreference: 'high-performance',
     }));
+    // calidad: el nivel automático sale del nombre de la tarjeta gráfica
+    this.gpuRaw = ReliefEngine.rendererName(renderer.getContext());
+    this.autoQ = autoTier(this.gpuRaw, { small: this.small, memoryGb: (navigator as { deviceMemory?: number }).deviceMemory });
+    this.qSetting = opts.quality ?? 'auto';
+    this.q = qualityParams(this.qSetting === 'auto' ? this.autoQ : this.qSetting, this.small);
+    this.fineOn = this.q.fine;
+    this.fullDpr = this.dpr = pixelRatio(this.q, devicePixelRatio, (el.stage.clientWidth || innerWidth) * (el.stage.clientHeight || innerHeight));
     renderer.setPixelRatio(this.dpr);
     // revisar errores obliga al hilo principal a esperar la compilación en la GPU (~0.5 s al arrancar)
     renderer.debug.checkShaderErrors = !!opts.debug;
@@ -313,8 +343,7 @@ export class ReliefEngine {
     this.scene.add(this.hemi, this.sun, this.sun.target, this.moon);
     const sun = this.sun;
     sun.castShadow = true;
-    const sm = this.small ? 2048 : 4096;
-    sun.shadow.mapSize.set(sm, sm);
+    sun.shadow.mapSize.set(this.q.shadowMap, this.q.shadowMap);
     Object.assign(sun.shadow.camera, { left: -1.5, right: 1.5, top: 1.5, bottom: -1.5, near: 0.1, far: 12 });
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.01;
@@ -337,7 +366,7 @@ export class ReliefEngine {
     c.enableDamping = true; c.dampingFactor = 0.08;
     c.screenSpacePanning = false; c.panSpeed = 0.9;
     // con el relieve de 30 m se puede bajar hasta ~6 km; sin él, 12 km
-    c.minDistance = this.fineOn ? 0.06 : 0.12; c.maxDistance = 6.5;
+    c.minDistance = this.q.minKm * UNIT; c.maxDistance = 6.5;
     c.maxPolarAngle = Math.PI * 0.47;
     c.rotateSpeed = 0.55; c.zoomSpeed = 0.9;
     c.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
@@ -351,13 +380,28 @@ export class ReliefEngine {
 
     const g = this.geo;
     this.hu.uGridMap.value.set(g.xMin, g.zMin, meta.step * g.KX, meta.step * g.KZ);
-    this.hu.uLod.value.set(...LOD_BLEND);
+    this.hu.uLod.value.set(...this.q.blend);
 
     this.bindInput(canvas);
     this.resize();
     this.placeSun();
     this.load().catch(e => this.fail(e));
   }
+
+  /** Nombre de la tarjeta gráfica que da WebGL (Firefox ya lo da en RENDERER; Chrome, Edge y Safari, con la extensión). */
+  private static rendererName(gl: WebGLRenderingContext | WebGL2RenderingContext) {
+    try {
+      const r = String(gl.getParameter(gl.RENDERER) ?? '');
+      if (r && !/^(webkit webgl|mozilla)$/i.test(r)) return r;
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      return ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : r;
+    } catch {
+      return '';
+    }
+  }
+
+  /** texturas más chicas (celulares y calidad Básica) */
+  private get lite() { return this.small || this.q.tier === 'low'; }
 
   /* ================= carga ================= */
   private dataUrls() {
@@ -374,6 +418,7 @@ export class ReliefEngine {
       dem: this.dataUrl('relieve-30m.bin', new URL('../data/relieve-30m.bin', import.meta.url).href),
       flow: this.dataUrl('capas/flujo-90m.bin', new URL('../data/capas/flujo-90m.bin', import.meta.url).href),
       sat: this.dataUrl('capas/satelite-16m.bin', new URL('../data/capas/satelite-16m.bin', import.meta.url).href),
+      bld: this.dataUrl('capas/edificios.bin', new URL('../data/capas/edificios.bin', import.meta.url).href),
     };
   }
 
@@ -402,7 +447,7 @@ export class ReliefEngine {
     const req: BuildRequest = {
       urls: this.dataUrls(),
       grid: { W: meta.W, H: meta.H, step: meta.step, lon0: meta.lon0, lat0: meta.lat0 },
-      quality: { tex: this.small ? 2048 : 4096, dotStep: this.small ? 4 : 3, mini: { w: 380, h: 364 } },
+      quality: { tex: this.lite ? 2048 : 4096, dotStep: this.lite ? 4 : 3, mini: { w: 380, h: 364 } },
     };
     // después del primer cuadro llegan las líneas y se cierra el worker
     const finish = () => { worker.terminate(); if (this.worker === worker) this.worker = null; };
@@ -444,7 +489,7 @@ export class ReliefEngine {
     this.opts.onReady?.({ minElev: meta.relief.min, maxElev: meta.relief.max, sunrise, sunset, timings: this.timings });
     if (this.pendingDetail) { this.applyDetail(this.pendingDetail); this.pendingDetail = null; }
     if (this.pendingLines) { this.applyLines(this.pendingLines); this.pendingLines = null; }
-    if (this.service && this.fineOn) this.service.packs.then(p => this.setupTiles(p.dem, p.sat));
+    if (this.service && this.fineOn) this.service.packs.then(p => { this.setupTiles(p.dem, p.sat); this.setupBuildings(p.bld); });
   }
 
   private fail(e: unknown) {
@@ -459,10 +504,10 @@ export class ReliefEngine {
     const palette = makePalette(ALT_STOPS_HEX, 3400);
     const tu = (this.tu = makeTerrainUniforms(this.shared, this.hu, { muni: blankRG(), fields: blankTexture([128, 0, 128, 128]), palette }, W, H));
     const defines = heightDefines(this.fineOn, this.fineOn);
-    const terrainMat = (this.terrainMat = createTerrainMaterial(tu, defines));
+    const terrainMat = (this.terrainMat = createTerrainMaterial(tu, { ...defines, ...this.qualityDefines() }));
     const casterMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
     const casterDepth = createCasterDepthMaterial(this.hu, tu);
-    const lod = (this.lod = new TerrainLod(terrainMat, casterMat, casterDepth, { depth: this.fineOn ? 8 : 5, range: 30, n: 32 }));
+    const lod = (this.lod = new TerrainLod(terrainMat, casterMat, casterDepth, { ...this.q.lod, n: 32 }));
     this.model.add(lod.view, lod.caster);
     const empty = (n: number) => new THREE.BufferAttribute(new Float32Array(0), n);
 
@@ -496,7 +541,7 @@ export class ReliefEngine {
     this.model.add(night);
 
     // nubes: sus pasadas se compilan junto con la escena
-    const clouds = (this.clouds = new Clouds(this.renderer, this.hu, tu, tu.tFields, this.shared, this.small));
+    const clouds = (this.clouds = new Clouds(this.renderer, this.hu, tu, tu.tFields, this.shared, this.q.clouds));
     if (this.opts.liveCloudsUrl !== undefined) clouds.liveUrl = this.opts.liveCloudsUrl;
     clouds.onLive = s => this.onLive(s);
     clouds.set({ ...this.opts.clouds });
@@ -506,6 +551,9 @@ export class ReliefEngine {
     this.updateCloudLight();
 
     this.disposables.push(palette, terrainMat, casterMat, casterDepth, lod, wg, wallMat, wallDepth, dg, dotMat, ng, nightMat, clouds);
+    // (con las uniformes del relieve ya creadas: cielo del agua y dirección de las sombras trazadas)
+    this.placeSun();
+    if (this.q.accumulate) this.acc = new Accumulator(this.renderer);
     this.prep = { tu, palette, walls, dots, night, compile: this.renderer.compileAsync(this.scene, this.camera).catch(() => undefined) };
     // las pasadas de las nubes se compilan aparte: no retrasan el primer cuadro (aparecen cuando terminan)
     clouds.compile().then(() => this.wake());
@@ -724,17 +772,23 @@ export class ReliefEngine {
     return rt;
   }
 
-  /** Teselas de detalle: relieve de 30 m (alturas + normales) e imagen satelital fina, en atlas de la GPU. */
+  /**
+   * Teselas de detalle: relieve de 30 m (alturas + normales) e imagen satelital fina, en atlas de la GPU con las ranuras
+   * que pide la calidad (14 × 14 y 8 × 8 en Normal).
+   */
   private setupTiles(dem: TilePackInfo | null, sat: TilePackInfo | null) {
     const tu = this.tu, hf = this.hf, svc = this.service;
     if (!tu || !hf || !svc || this.disposed || (!dem && !sat)) return;
+    this.packs = { dem, sat };
     const info = dem ?? sat!, rows = (dem?.ny ?? 0) + (sat?.ny ?? 0);
     const pages = new THREE.DataTexture(new Uint8Array(info.nx * rows * 4), info.nx, rows, THREE.RGBAFormat);
     pages.minFilter = pages.magFilter = THREE.NearestFilter;
     pages.needsUpdate = true;
     this.hu.tPages.value = pages;
-    this.disposables.push(pages);
-    const r = this.renderer, at = new THREE.Vector2();
+    this.tileTex.push(pages);
+    const r = this.renderer, at = new THREE.Vector2(), maxTex = r.capabilities.maxTextureSize;
+    const DEM_SLOTS = Math.max(1, Math.min(this.q.tiles.dem, Math.floor(maxTex / ((dem?.px ?? 2) - 2))));
+    const SAT_SLOTS = Math.max(1, Math.min(this.q.tiles.sat, Math.floor(maxTex / (sat?.px ?? 1))));
     if (dem) {
       const S = dem.px - 2, size = S * DEM_SLOTS;
       const atlas = new THREE.DataTexture(new Uint16Array(size * size * 2), size, size, THREE.RGIntegerFormat, THREE.UnsignedShortType);
@@ -761,7 +815,7 @@ export class ReliefEngine {
         onEvict: i => this.tiles30?.data.delete(i),
         onChange: () => { this.lodEx = -1; this.invalidate(); },
       });
-      this.disposables.push(atlas);
+      this.tileTex.push(atlas);
     }
     if (sat) {
       const S = sat.px, size = S * SAT_SLOTS;
@@ -787,9 +841,29 @@ export class ReliefEngine {
         // al llegar una tesela se piden las que siguen
         onChange: () => { this.tileDirty = true; this.invalidate(); },
       });
-      this.disposables.push(atlas);
+      this.tileTex.push(atlas);
       this.applyBaseSlots();
     }
+    this.tileDirty = true;
+    this.wake();
+  }
+
+  /** Edificios: material (misma superficie, luz y sombras que el relieve) y teselas que se piden al acercarse. */
+  private setupBuildings(info: TilePackInfo | null) {
+    const tu = this.tu, svc = this.service, lod = this.lod;
+    if (!info || !tu || !svc || !lod || this.disposed || this.buildings) return;
+    const mat = (this.bldMat = createBuildingMaterial(this.shared, this.hu, tu, { ...heightDefines(this.fineOn, this.fineOn), ...this.qualityDefines(true) }));
+    const g = this.geo;
+    const b = (this.buildings = new Buildings({
+      info, material: mat, frame: { x0: g.xMin, z0: g.zMin, sx: meta.step * g.KX, sz: meta.step * g.KZ },
+      bounds: (size, tx, ty) => lod.bounds(size, tx, ty),
+      load: i => svc.tile('bld', i),
+      // al llegar una tesela se piden las que siguen
+      onChange: () => { this.tileDirty = true; this.invalidate(); },
+    }));
+    this.model.add(b.group);
+    this.disposables.push(mat);
+    this.applyLayers();
     this.tileDirty = true;
     this.wake();
   }
@@ -799,10 +873,10 @@ export class ReliefEngine {
     const lod = this.lod;
     if (!lod) return;
     const sets: [TileSet<Uint16Array> | TileSet<ImageBitmap>, number][] = [];
-    if (this.demTiles) sets.push([this.demTiles, LOD_BLEND[3] + 4]);
+    if (this.demTiles) sets.push([this.demTiles, this.q.blend[3] + 4]);
     // la imagen fina solo si el satélite está a la vista (como mapa base o en la cortina)
     const satShown = this.base.id === 'satelite' || this.cmp?.base === 'satelite';
-    if (this.satTiles) sets.push([this.satTiles, satShown ? 45 : 0]);
+    if (this.satTiles) sets.push([this.satTiles, satShown ? this.q.tiles.satKm : 0]);
     const F = { x0: this.geo.xMin, z0: this.geo.zMin, sx: meta.step * this.geo.KX, sz: meta.step * this.geo.KZ };
     const ex = this.ex, box = this.tileBox;
     // teselas a ≤ maxKm de una cámara (camE en km, y exagerada) y a la vista; prioridad = distancia + extra
@@ -823,6 +897,7 @@ export class ReliefEngine {
         list?.push([set, i]);
       }
     };
+    this.buildings?.update(this.camE, this.frustum, this.ex, now);
     // (la lista de teselas de una precarga se arma la primera vez que se calcula)
     const fresh = new Set(this.prefetches.filter(p => !p.tiles));
     for (const p of fresh) p.tiles = [];
@@ -856,6 +931,90 @@ export class ReliefEngine {
     lod.update(this.camE, this.frustum, UNIT, this.ex);
     this.lodEx = this.ex;
     this.tileDirty = true;
+  }
+
+  /* ================= calidad de imagen ================= */
+  /** Calidad elegida, nivel en uso, el que convendría solo y la tarjeta gráfica. */
+  get quality(): QualityInfo {
+    return { setting: this.qSetting, tier: this.q.tier, auto: this.autoQ, gpu: gpuName(this.gpuRaw), gpuKind: gpuKind(this.gpuRaw) };
+  }
+
+  /**
+   * Cambia la calidad sin recargar: resolución, densidad del relieve y distancias del relieve fino, atlas de teselas,
+   * nubes, sombras trazadas, agua y antialias en reposo. Devuelve false si el cambio pide volver a crear el visor (de o
+   * hacia Básica: el relieve fino se decide al cargar).
+   */
+  setQuality(setting: QualitySetting): boolean {
+    const q = qualityParams(setting === 'auto' ? this.autoQ : setting, this.small);
+    if (q.fine !== this.fineOn) return false;
+    this.qSetting = setting;
+    const prev = this.q;
+    this.q = q;
+    if (prev.tier === q.tier) return true;
+    // densidad de píxeles y tamaños que dependen de ella
+    this.resize();
+    // relieve: niveles de detalle y distancias del relieve fino
+    this.hu.uLod.value.set(...q.blend);
+    this.lod?.setOptions(q.lod);
+    this.lodEx = -1;
+    if (prev.tiles.dem !== q.tiles.dem || prev.tiles.sat !== q.tiles.sat) this.rebuildTiles();
+    // sombras: el mapa de 270 m (paredes y suelo; el relieve en Básica y Normal) y las trazadas
+    if (prev.shadowMap !== q.shadowMap) {
+      this.sun.shadow.mapSize.set(q.shadowMap, q.shadowMap);
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null;
+    }
+    this.shadowDirty = true;
+    for (const [k, v] of Object.entries({ RH_RAYSHADOW: null, RH_WATER2: null, ...this.qualityDefines() })) this.setDefine(k, v);
+    const bd = this.bldMat?.defines as Record<string, string> | undefined, ray = this.qualityDefines(true).RH_RAYSHADOW;
+    if (bd && bd.RH_RAYSHADOW !== ray) { if (ray) bd.RH_RAYSHADOW = ray; else delete bd.RH_RAYSHADOW; this.bldMat!.needsUpdate = true; }
+    this.controls.minDistance = q.minKm * UNIT;
+    this.applyLayers();
+    this.updateRay();
+    this.clouds?.setQuality(q.clouds);
+    // promedio en reposo: sus destinos (del tamaño del lienzo) solo existen en Alta y Máxima
+    this.acc?.reset();
+    if (q.accumulate && !this.acc) this.acc = new Accumulator(this.renderer);
+    else if (!q.accumulate && this.acc) { this.acc.dispose(); this.acc = null; }
+    this.tileDirty = this.labelsDirty = true;
+    this.invalidate();
+    return true;
+  }
+
+  /** Variantes del sombreador del relieve (o, con onlyRay, de los edificios) que pide la calidad. */
+  private qualityDefines(onlyRay = false): Record<string, string> {
+    const q = this.q;
+    return {
+      ...(q.rayShadows.steps ? { RH_RAYSHADOW: String(q.rayShadows.steps) } : {}),
+      ...(q.water && !onlyRay ? { RH_WATER2: '' } : {}),
+    };
+  }
+
+  /** Rehace los atlas de teselas con el tamaño de la calidad (las teselas vuelven a pedirse; el worker las guarda). */
+  private rebuildTiles() {
+    if (!this.packs) return;
+    this.demTiles?.dispose();
+    this.satTiles?.dispose();
+    this.demTiles = this.satTiles = null;
+    for (const t of this.tileTex) t.dispose();
+    this.tileTex = [];
+    this.tiles30 = null;
+    this.hf?.setTiles(null);
+    const { dem, sat } = this.packs;
+    this.setupTiles(dem, sat);
+  }
+
+  /**
+   * Sombras trazadas: dirección hacia el Sol en celdas de la rejilla por km y subida del rayo en escala real (la
+   * exageración aplana el ángulo); penumbra de ~0.6° vista en la escena exagerada.
+   */
+  private updateRay() {
+    const tu = this.tu;
+    if (!tu) return;
+    const p = this.sun.position, h = Math.hypot(p.x, p.z), g = this.geo;
+    if (!this.q.rayShadows.steps || h < 1e-6) { tu.uRayL.value.z = 0; return; }
+    tu.uRayL.value.set(p.x / h / (meta.step * g.KX), p.z / h / (meta.step * g.KZ), p.y / h / this.ex);
+    tu.uRayP.value.set(0.01 / this.ex, meta.relief.max + 30, this.q.rayShadows.grow);
   }
 
   /* ================= API pública ================= */
@@ -914,7 +1073,7 @@ export class ReliefEngine {
       p = loadBaseMap(id, {
         usvBin: this.dataUrl('capas/usv.bin', new URL('../data/capas/usv.bin', import.meta.url).href),
         usvJson: this.dataUrl('capas/usv.json', new URL('../data/capas/usv.json', import.meta.url).href),
-        sat: this.small
+        sat: this.lite
           ? this.dataUrl('capas/satelite-2048.webp', new URL('../data/capas/satelite-2048.webp', import.meta.url).href)
           : this.dataUrl('capas/satelite-4096.webp', new URL('../data/capas/satelite-4096.webp', import.meta.url).href),
       }, this.renderer.capabilities.getMaxAnisotropy(), meta.W);
@@ -1107,7 +1266,7 @@ export class ReliefEngine {
     for (;;) {
       this.updateLod();
       this.updateTiles(cap.clock);
-      const settled = (this.demTiles?.settled ?? true) && (this.satTiles?.settled ?? true) && !this.baseAnim && !this.baseWait;
+      const settled = (this.demTiles?.settled ?? true) && (this.satTiles?.settled ?? true) && (this.buildings?.settled ?? true) && !this.baseAnim && !this.baseWait;
       if (settled || performance.now() - t0 > maxWait) break;
       await new Promise(r => setTimeout(r, 40));
       if (this.cap !== cap || this.disposed) return;
@@ -1351,9 +1510,13 @@ export class ReliefEngine {
     const probe = this.probe.visible, hover = this.tu?.uHover.value ?? 0;
     this.probe.visible = false;
     if (this.tu) this.tu.uHover.value = 0;
-    // nubes a resolución completa aunque el último cuadro fuera en movimiento
-    if (this.clouds?.visible) this.clouds.render(this.camera, this.controls.target, this.ex);
-    this.renderer.render(this.scene, this.camera);
+    // nubes a resolución completa aunque el último cuadro fuera en movimiento; con Alta y Máxima, el promedio completo
+    this.draw(false);
+    if (this.acc && this.q.accumulate) {
+      this.acc.reset();
+      this.acc.add();
+      for (let k = 1; k < this.q.accumulate; k++) this.drawJittered(k, 0);
+    }
     ctx.drawImage(src, 0, 0);
     this.probe.visible = probe;
     if (this.tu) this.tu.uHover.value = hover;
@@ -1374,7 +1537,8 @@ export class ReliefEngine {
     ctx.fillText('Relieve de Hidalgo', 20 * k, 26 * k);
     ctx.font = `${Math.round(10 * k)}px "JetBrains Mono", ui-monospace, monospace`;
     ctx.fillStyle = 'rgba(238,241,245,0.75)';
-    ctx.fillText(`Elevación: INEGI y USGS (Terrain Tiles) · Agua: © OpenStreetMap · Límites y localidades: INEGI · Exageración vertical ${this.exTarget.toFixed(1)}×`, 20 * k, h - 18 * k);
+    const bld = this.buildings?.group.visible && this.buildings.count ? ' · Edificios: © Microsoft (ODbL), alturas estimadas' : '';
+    ctx.fillText(`Elevación: INEGI y USGS (Terrain Tiles) · Agua: © OpenStreetMap · Límites y localidades: INEGI${bld} · Exageración vertical ${this.exTarget.toFixed(1)}×`, 20 * k, h - 18 * k);
     return new Promise((resolve, reject) => out.toBlob(b => (b ? resolve(b) : reject(new Error('No se pudo generar la imagen'))), 'image/png'));
   }
 
@@ -1385,11 +1549,14 @@ export class ReliefEngine {
     this.service?.dispose();
     this.demTiles?.dispose();
     this.satTiles?.dispose();
+    this.buildings?.dispose();
     this.cmp?.curtain.dispose();
     for (const f of this.cleanup) f();
     this.controls.dispose();
     this.overlays?.dispose();
     this.rasters?.dispose();
+    this.acc?.dispose();
+    for (const t of this.tileTex) t.dispose();
     for (const d of this.disposables) d.dispose();
     this.labels?.dispose();
     this.renderer.dispose();
@@ -1414,6 +1581,16 @@ export class ReliefEngine {
     const sky = skyAt(this.sunElevDeg);
     this.shared.uHazeColor.value.set(...sky.haze);
     this.el.root.style.setProperty('--rh-glow', `rgb(${sky.glow.map(v => Math.round(v * 255)).join(' ')})`);
+    const tu = this.tu;
+    if (tu) {
+      // cielo que refleja el agua (Alta y Máxima): el de la bruma en el horizonte y uno más hondo en el cenit, con la luz del día
+      const lum = (0.2 + 0.8 * day) * 1.15;
+      tu.uSkyHorizon.value.setRGB(...sky.haze, THREE.SRGBColorSpace).multiplyScalar(lum);
+      tu.uSkyZenith.value.setRGB(...sky.zenith, THREE.SRGBColorSpace).multiplyScalar(lum);
+      tu.uSkySun.value.copy(this.sun.color).multiplyScalar((this.sun.intensity / Math.PI) * 0.25);
+      tu.uSunW.value.copy(this.sun.position).normalize();
+    }
+    this.updateRay();
     this.shadowDirty = true;
     this.updateCloudLight();
   }
@@ -1447,6 +1624,14 @@ export class ReliefEngine {
     this.tu.uBorders.value = L.borders ? 1 : 0;
     this.tu.uContours.value = L.contours ? 1 : 0;
     this.clouds?.setOn(L.clouds);
+    // edificios: a menos de los km de la calidad (en Básica no hay)
+    if (this.buildings && this.bldMat) {
+      const km = L.buildings ? this.q.buildingsKm : 0;
+      this.buildings.range = km;
+      this.buildings.group.visible = km > 0;
+      (this.bldMat.userData.range as { value: number }).value = km;
+      this.tileDirty = true;
+    }
   }
 
   /* ================= cámara ================= */
@@ -1627,6 +1812,15 @@ export class ReliefEngine {
     const w = this.el.stage.clientWidth, h = this.el.stage.clientHeight;
     // (al grabar, el lienzo tiene el tamaño de la grabación; se ajusta al terminar)
     if (!w || !h || this.cap) return;
+    // densidad de píxeles de la calidad (el supermuestreo de Máxima depende del tamaño del lienzo)
+    const full = pixelRatio(this.q, devicePixelRatio, w * h);
+    if (full !== this.fullDpr) {
+      this.fullDpr = this.dpr = full;
+      this.renderer.setPixelRatio(full);
+      this.overlays?.setPixelRatio(full);
+      const night = this.prep?.night.material as THREE.ShaderMaterial | undefined;
+      if (night) night.uniforms.uScale.value = full;
+    }
     this.renderer.setSize(w, h, false);
     this.overlays?.resolution.set(w, h);
     this.clouds?.setSize(w, h);
@@ -1755,11 +1949,35 @@ export class ReliefEngine {
   private frame = (now: number) => {
     this.raf = 0;
     if (this.disposed || !this.visible || this.cap) { this.running = false; return; }
-    const { moving, render, keep } = this.update(now);
-    if (render) this.draw(moving);
-    if (keep) this.raf = requestAnimationFrame(this.frame);
+    const { moving, render, dirty, keep } = this.update(now);
+    const acc = this.acc, n = acc ? this.q.accumulate : 0;
+    if (!acc || !n || moving) {
+      if (render) this.draw(moving);
+      acc?.reset();
+    } else if (dirty || acc.k === 0) {
+      // en reposo: un cuadro normal y desde él empieza el promedio
+      this.draw(false);
+      acc.add();
+    } else if (acc.k < n || render) {
+      // los que siguen, desplazados; si solo se anima el agua o las nubes, promedio con memoria corta (sin estelas largas)
+      this.drawJittered(acc.k, render ? 0.2 : 0);
+    }
+    if (keep || (n && !moving && acc && acc.k < n)) this.raf = requestAnimationFrame(this.frame);
     else this.running = false;
   };
+
+  /** Un cuadro del promedio en reposo: cámara desplazada menos de un píxel y otro azar para nubes y sombras trazadas. */
+  private drawJittered(k: number, minW: number) {
+    const [jx, jy] = Accumulator.jitter(k), c = this.renderer.domElement;
+    this.camera.setViewOffset(c.width, c.height, jx, jy, c.width, c.height);
+    this.shared.uFrame.value = k;
+    this.clouds?.setFrame(k);
+    this.draw(false);
+    this.camera.clearViewOffset();
+    this.shared.uFrame.value = 0;
+    this.clouds?.setFrame(0);
+    this.acc!.add(minW);
+  }
 
   /**
    * Un paso del bucle: animaciones, cámara, parches y teselas, cursor, etiquetas y minimapa. Al grabar (this.cap) no
@@ -1784,6 +2002,7 @@ export class ReliefEngine {
       this.ground.position.y = BASE_KM * UNIT * this.ex - 0.002;
       model.updateMatrixWorld();
       this.shadowDirty = this.labelsDirty = true;
+      this.updateRay();
       active = true;
     }
     if (this.baseAnim && this.tu) {
@@ -1891,7 +2110,8 @@ export class ReliefEngine {
     }
     const render = moving || this.renderDirty || (ambient && this.frameN % 2 === 0);
     const keep = moving || ambient || this.renderDirty || this.labelsDirty || this.miniDirty || P.dirty || this.dpr < this.fullDpr || this.tileDirty || !!sky?.coarse;
-    return { moving, render, keep };
+    // dirty: cambió algo que no es solo la animación del agua o de las nubes (el promedio en reposo vuelve a empezar)
+    return { moving, render, dirty: this.renderDirty, keep };
   }
 
   /** Dibuja el cuadro: volumen y sombra de las nubes (en sus propios destinos; al moverse, con menos resolución) y la escena. */

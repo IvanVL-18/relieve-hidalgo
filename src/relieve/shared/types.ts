@@ -1,3 +1,4 @@
+import type { BuildingTile } from './buildings';
 /** Localidad para etiquetas: [nombre, tipo (0 ciudad, 1 pueblo, 2 localidad), lon, lat, municipio (1–84), población 2020] */
 export type Place = [name: string, kind: 0 | 1 | 2, lon: number, lat: number, muni: number, pop: number];
 
@@ -94,16 +95,18 @@ export type TerrainOp = 'elevation' | 'profile' | 'grid' | 'watershed' | 'flowpa
 
 /** Mensajes al worker de relieve (worker/terrain.worker.ts). */
 export type TerrainRequest =
-  | { type: 'init'; urls: { detail: string; flow: string; dem: string; sat: string }; grid: GridMeta; detail: boolean; tiles: boolean }
-  | { type: 'tile'; id: number; layer: 'dem' | 'sat'; index: number }
+  | { type: 'init'; urls: { detail: string; flow: string; dem: string; sat: string; bld?: string }; grid: GridMeta; detail: boolean; tiles: boolean }
+  | { type: 'tile'; id: number; layer: 'dem' | 'sat' | 'bld'; index: number }
   | { type: 'query'; id: number; op: TerrainOp; args: Record<string, unknown> };
 
 /** Respuestas del worker de relieve. */
 export type TerrainMessage =
   | DetailResult
-  | { type: 'packs'; dem: TilePackInfo | null; sat: TilePackInfo | null }
+  | { type: 'packs'; dem: TilePackInfo | null; sat: TilePackInfo | null; bld: TilePackInfo | null }
   /** relieve de 30 m: RG16 por nodo (altura en cuartos de metro, 0 = sin dato; normal x, z en 8 + 8 bits) */
   | { type: 'tile'; id: number; layer: 'dem'; data: Uint16Array | null }
   | { type: 'tile'; id: number; layer: 'sat'; bitmap: ImageBitmap | null }
+  /** edificios: geometría lista para la GPU (shared/buildings.ts) */
+  | { type: 'tile'; id: number; layer: 'bld'; geom: BuildingTile | null }
   | { type: 'result'; id: number; value: unknown }
   | { type: 'error'; id: number | null; message: string };

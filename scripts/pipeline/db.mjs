@@ -127,6 +127,12 @@ if (exists('solar_municipios.json')) {
   await db.query(`comment on table relieve.solar_municipios is 'Radiación solar anual sobre el terreno a 90 m (kWh/m²·año): clima del Global Solar Atlas (Solargis, CC BY 4.0) repartido en meses con NASA POWER, con pendiente, orientación y horizonte del relieve de INEGI. plano = la de un terreno plano y despejado en el mismo lugar; km² por clase'`);
   await insert('solar_municipios', cols, readJSON(path.join(OUT, 'solar_municipios.json')));
 }
+if (exists('edificios_municipios.json')) {
+  const cols = ['cve_mun', 'edificios', 'km2_huellas', 'altura_media_estimada_m'];
+  await db.query('create table relieve.edificios_municipios (cve_mun smallint primary key, edificios integer, km2_huellas real, altura_media_estimada_m real)');
+  await db.query(`comment on table relieve.edificios_municipios is 'Edificios por municipio según las huellas de Microsoft Global ML Building Footprints (versión 2026-02-03, ODbL), las que el visor dibuja. La altura no viene en los datos: se estima por el área de la huella y la densidad de edificios alrededor'`);
+  await insert('edificios_municipios', cols, readJSON(path.join(OUT, 'edificios_municipios.json')));
+}
 if (exists('movilidad_flujos.json')) {
   await db.query(`create table relieve.movilidad_flujos (id serial primary key, tipo text, cve_mun_origen smallint, destino_clave text, destino text, personas integer, registros integer)`);
   await db.query(`comment on table relieve.movilidad_flujos is 'Traslados diarios al trabajo y a la escuela desde cada municipio de Hidalgo (muestra del Censo 2020, cuestionario ampliado, con factor de expansión): destino_clave = municipio de Hidalgo (13mmm), municipio del Estado de México (15mmm), 09 = Ciudad de México o la clave del estado; registros < 20 = estimación imprecisa'`);

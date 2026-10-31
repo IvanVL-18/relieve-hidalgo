@@ -5,6 +5,12 @@ const pad = 0.03;
 export const BBOX = { s: LAT1 - pad, w: LON0 - pad, n: LAT0 + pad, e: LON1 + pad };
 
 export const SOURCES = {
+  // huellas de edificios detectadas en imágenes de satélite: lista de archivos (uno por cuadrícula z9 de Bing, quadkey) y
+  // de ella los de México que tocan el rectángulo del mapa; GeoJSON por renglón en .csv.gz. Para México no traen altura
+  edificios: {
+    url: 'https://minedbuildings.z5.web.core.windows.net/global-buildings/dataset-links.csv', file: 'edificios/', region: 'Mexico',
+    fuente: 'Microsoft, Global ML Building Footprints (versión 2026-02-03)', licencia: 'Open Data Commons Open Database License (ODbL) 1.0',
+  },
   iter: { url: 'https://www.inegi.org.mx/contenidos/programas/ccpv/2020/datosabiertos/iter/iter_13_cpv2020_csv.zip', file: 'iter/iter_13_cpv2020_csv.zip', fuente: 'INEGI, Censo de Población y Vivienda 2020, ITER', licencia: 'Términos de libre uso de la información del INEGI' },
   // muestra del censo (cuestionario ampliado): municipio de trabajo y de escuela de cada persona, con su factor de expansión
   muestra: { url: 'https://www.inegi.org.mx/contenidos/programas/ccpv/2020/microdatos/Censo2020_CA_hgo_csv.zip', file: 'inegi/Censo2020_CA_hgo_csv.zip', fuente: 'INEGI, Censo de Población y Vivienda 2020, microdatos de la muestra (cuestionario ampliado), Hidalgo', licencia: 'Términos de libre uso de la información del INEGI' },

@@ -1,3 +1,4 @@
+import { buildingGeometry, decodeBuildings } from '../shared/buildings';
 import { makeGeo, type Geo } from '../shared/geo';
 import {
   D8, EARTH_R, bilinear, downstreamPath, floodLevels, flowAccumulation, hornNormals, longestFlowPath, losLift, maskOutline, slopeGrid, snapToStream,
@@ -11,13 +12,14 @@ import { Pack, gunzip, type PackInfo } from './pack';
  * Worker de relieve, uno por visor y de larga vida:
  *   · relieve de 90 m para el sombreado fino (normales + altura), que se queda también aquí para los análisis
  *   · teselas de 30 m (altura + normal) e imagen satelital fina para el detalle al acercarse
+ *   · teselas de edificios: geometría de paredes y techos lista para la GPU
  *   · consultas de los análisis: elevación, perfil, rejillas de elevación/pendiente/orientación/acumulación,
  *     cuenca y trayectoria del agua (D8 a 90 m), inundación y zona visible desde torres
  */
 const ctx = self as unknown as { postMessage(msg: TerrainMessage, transfer?: Transferable[]): void; onmessage: ((ev: MessageEvent<TerrainRequest>) => void) | null };
 
 let grid: GridMeta, geo: Geo, urls: Extract<TerrainRequest, { type: 'init' }>['urls'];
-let demPack: Pack | null = null, satPack: Pack | null = null;
+let demPack: Pack | null = null, satPack: Pack | null = null, bldPack: Pack | null = null;
 interface Detail90 { w: number; h: number; f: number; z: Int16Array }
 /** relieve de 90 m (m, entero; 0 = sin dato) */
 let d90: Promise<Detail90> | null = null;
@@ -99,6 +101,13 @@ async function demRender(index: number) {
     out[o * 2 + 1] = (nx << 8) | nz;
   }
   return out;
+}
+
+/** Edificios de una tesela: paredes y techos (shared/buildings.ts). */
+async function bldRender(index: number) {
+  const pack = bldPack!, info = await pack.open(), bytes = await pack.tile(index);
+  if (!bytes) return null;
+  return buildingGeometry(decodeBuildings(await gunzip(bytes), index % info.nx, Math.floor(index / info.nx), info.tileCells));
 }
 
 async function satRender(index: number) {
@@ -471,11 +480,13 @@ ctx.onmessage = async ({ data: m }) => {
     if (m.type === 'init') {
       grid = m.grid; geo = makeGeo(grid); urls = m.urls;
       if (m.tiles) {
-        demPack = new Pack(urls.dem); satPack = new Pack(urls.sat);
-        const [dem, sat] = await Promise.all([demPack.open().catch(() => null), satPack.open().catch(() => null)]);
+        demPack = new Pack(urls.dem); satPack = new Pack(urls.sat); bldPack = urls.bld ? new Pack(urls.bld) : null;
+        // (los edificios son opcionales: sin el archivo el visor sigue sin ellos)
+        const [dem, sat, bld] = await Promise.all([demPack.open().catch(() => null), satPack.open().catch(() => null), bldPack?.open().catch(() => null) ?? null]);
         if (!dem) demPack = null;
         if (!sat) satPack = null;
-        ctx.postMessage({ type: 'packs', dem, sat });
+        if (!bld) bldPack = null;
+        ctx.postMessage({ type: 'packs', dem, sat, bld });
       } else {
         // sin detalle en pantalla: el relieve de 30 m se usa igual en las consultas, si está
         demPack = new Pack(urls.dem);
@@ -486,6 +497,9 @@ ctx.onmessage = async ({ data: m }) => {
       if (m.layer === 'dem') {
         const data = demPack ? await demRender(m.index) : null;
         ctx.postMessage({ type: 'tile', id: m.id, layer: 'dem', data }, data ? [data.buffer] : []);
+      } else if (m.layer === 'bld') {
+        const geom = bldPack ? await bldRender(m.index) : null;
+        ctx.postMessage({ type: 'tile', id: m.id, layer: 'bld', geom }, geom ? [geom.pos.buffer, geom.center.buffer, geom.info.buffer, geom.index.buffer] : []);
       } else {
         const bitmap = satPack ? await satRender(m.index) : null;
         ctx.postMessage({ type: 'tile', id: m.id, layer: 'sat', bitmap }, bitmap ? [bitmap] : []);

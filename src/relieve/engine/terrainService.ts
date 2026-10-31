@@ -1,10 +1,11 @@
 import type { Flood, FlowPath, GridKind, Profile, TerrainApi, TerrainGrid, Tower, Viewshed, Watershed } from '../shared/terrain';
+import type { BuildingTile } from '../shared/buildings';
 import type { DetailResult, GridMeta, TerrainMessage, TerrainOp, TerrainRequest, TilePackInfo } from '../shared/types';
 
 export interface TerrainServiceOptions {
   /** mandar el relieve de 90 m para el sombreado */
   detail: boolean;
-  /** abrir los paquetes de teselas (relieve de 30 m e imagen fina) para el detalle al acercarse */
+  /** abrir los paquetes de teselas (relieve de 30 m, imagen fina y edificios) para el detalle al acercarse */
   tiles: boolean;
   onDetail?(m: DetailResult): void;
   onWarning?(message: string): void;
@@ -20,28 +21,28 @@ export class TerrainService implements TerrainApi {
   private waiting = new Map<number, { resolve: (v: never) => void; reject: (e: Error) => void }>();
   private closed = false;
   /** paquetes de teselas abiertos (null si no hay o no se pidieron) */
-  readonly packs: Promise<{ dem: TilePackInfo | null; sat: TilePackInfo | null }>;
+  readonly packs: Promise<{ dem: TilePackInfo | null; sat: TilePackInfo | null; bld: TilePackInfo | null }>;
 
   constructor(urls: Extract<TerrainRequest, { type: 'init' }>['urls'], grid: GridMeta, o: TerrainServiceOptions) {
     const worker = (this.worker = new Worker(new URL('../worker/terrain.worker.ts', import.meta.url), { type: 'module' }));
-    let gotPacks: (p: { dem: TilePackInfo | null; sat: TilePackInfo | null }) => void = () => undefined;
-    this.packs = o.tiles ? new Promise(r => { gotPacks = r; }) : Promise.resolve({ dem: null, sat: null });
+    let gotPacks: (p: { dem: TilePackInfo | null; sat: TilePackInfo | null; bld: TilePackInfo | null }) => void = () => undefined;
+    this.packs = o.tiles ? new Promise(r => { gotPacks = r; }) : Promise.resolve({ dem: null, sat: null, bld: null });
     worker.onmessage = ({ data: m }: MessageEvent<TerrainMessage>) => {
       if (m.type === 'detail') o.onDetail?.(m);
       else if (m.type === 'packs') gotPacks(m);
-      else if (m.type === 'error' && m.id === null) { o.onWarning?.(m.message); gotPacks({ dem: null, sat: null }); }
+      else if (m.type === 'error' && m.id === null) { o.onWarning?.(m.message); gotPacks({ dem: null, sat: null, bld: null }); }
       else {
         const w = m.id !== null ? this.waiting.get(m.id) : undefined;
         if (!w || m.id === null) return;
         this.waiting.delete(m.id);
         if (m.type === 'error') w.reject(new Error(m.message));
-        else w.resolve((m.type === 'tile' ? (m.layer === 'dem' ? m.data : m.bitmap) : m.value) as never);
+        else w.resolve((m.type === 'tile' ? (m.layer === 'dem' ? m.data : m.layer === 'bld' ? m.geom : m.bitmap) : m.value) as never);
       }
     };
     worker.onerror = e => {
       const msg = e.message || 'Falló el worker de relieve';
       o.onWarning?.(msg);
-      gotPacks({ dem: null, sat: null });
+      gotPacks({ dem: null, sat: null, bld: null });
       for (const w of this.waiting.values()) w.reject(new Error(msg));
       this.waiting.clear();
     };
@@ -61,7 +62,9 @@ export class TerrainService implements TerrainApi {
   /** Tesela de 30 m (RG16: altura en cuartos de metro y normal) o de imagen (ImageBitmap); null si no hay. */
   tile(layer: 'dem', index: number): Promise<Uint16Array | null>;
   tile(layer: 'sat', index: number): Promise<ImageBitmap | null>;
-  tile(layer: 'dem' | 'sat', index: number) { return this.ask(id => ({ type: 'tile', id, layer, index })); }
+  /** Edificios de una tesela: geometría de paredes y techos. */
+  tile(layer: 'bld', index: number): Promise<BuildingTile | null>;
+  tile(layer: 'dem' | 'sat' | 'bld', index: number) { return this.ask(id => ({ type: 'tile', id, layer, index })); }
 
   elevation(lon: ArrayLike<number>, lat: ArrayLike<number>) { return this.query<Float32Array>('elevation', { lon: Array.from(lon), lat: Array.from(lat) }); }
   profile(lon: number[], lat: number[], stepM?: number) { return this.query<Profile>('profile', { lon, lat, step: stepM }); }

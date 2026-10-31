@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CLOUD_DEFAULTS, buildWeather, skyFor, windVector, withAmount, type CloudSettings, type SkyParams, type WeatherGrid } from '../shared/clouds';
 import { GIBS_URL, dayStartOf, type LiveCloudsStatus } from '../shared/goes';
+import type { CloudQuality } from '../shared/quality';
 import type { CloudWeatherRequest, CloudWeatherResult } from '../worker/clouds.worker';
 import type { HeightUniforms } from './heights';
 import { LiveClouds, type LiveFrame } from './liveClouds';
@@ -21,7 +22,6 @@ import { LiveClouds, type LiveFrame } from './liveClouds';
  */
 
 const UNIT = 0.01;            // unidades de escena por km (como en Engine)
-const NOISE = 64;             // texeles por lado del ruido 3D
 const WN = 256;               // ruido del tiempo
 const NOISE_KM = 18;          // periodo del ruido 3D: celdas de ≈ 4.5 km
 const WEATHER_KM = 300;       // periodo del ruido del tiempo: variación de ~75 km, celdas de tormenta cada ~50 km
@@ -169,8 +169,9 @@ void cSim(inout Column c, vec2 xz, vec4 wx) {
   float wet = mix(mix(0.35, 1.0, c.hum), mix(0.78, 1.05, c.hum), uStratus);
   c.cov = clamp(uCover * wet + v * mix(0.45, 0.2, uStratus), 0.0, 1.0) * c.mask;
   if (uStorm > 0.0) {
-    // celdas activas al azar, más donde es húmedo; aparecen y se apagan poco a poco
-    float id = texelFetch(tWNoise, ivec2(fract(wuv) * ${WN}.0) & ${WN - 1}, 0).b;
+    // celdas activas al azar, más donde es húmedo; aparecen y se apagan poco a poco. El número de la celda se lee
+    // interpolado: leído del texel más cercano, el borde entre una celda activa y una apagada salía en escalones de ~1 km
+    float id = wn.b;
     float on = clamp((uStorm * mix(0.45, 1.5, c.hum) - id) / 0.08 + 0.5, 0.0, 1.0) * smoothstep(0.55, 0.9, wx.r);
     c.tower = on * smoothstep(0.8, 0.94, wn.g);
     c.anvil = on * smoothstep(0.58, 0.86, wn.g);
@@ -253,6 +254,8 @@ uniform vec2 uHole;
 // desvanecimiento de las nubes bajo la cámara (km): de nada en x a completo en y
 uniform vec2 uNear;
 uniform float uQuality;
+// cuadro acumulado en reposo (calidad Alta y Máxima): cambia el inicio al azar de cada recorrido para promediar el grano
+uniform float uFrame;
 // relámpago: posición (km) e intensidad
 uniform vec4 uFlash;
 layout(location = 0) out highp vec4 oColor;
@@ -282,7 +285,7 @@ void main() {
   float slopeK = abs(dir.y) + uSlope * length(dir.xz) + 1e-3;
   vec3 ax = uTarget - uCam; float axL = length(ax); ax /= max(axL, 1e-4);
   // inicio desplazado al azar (sin bandas)
-  float jit = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  float jit = fract(fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) + uFrame * 0.618034);
   t += jit * min(0.1 + t * 0.0025, 1.0);
   float T = 1.0, tFront = -1.0;
   vec3 col = vec3(0.0);
@@ -495,6 +498,10 @@ export class Clouds {
   private quadCam = new THREE.OrthographicCamera();
   private quad: THREE.Mesh;
   private noise3: THREE.WebGL3DRenderTarget;
+  /** texeles por lado del ruido 3D en uso */
+  private noiseN: number;
+  /** ruido 3D de otro tamaño (cambió la calidad) que se genera mientras se dibuja con el anterior */
+  private building: { rt: THREE.WebGL3DRenderTarget; n: number } | null = null;
   private wnoise: THREE.WebGLRenderTarget;
   private shadowRT: THREE.WebGLRenderTarget;
   private rt: THREE.WebGLRenderTarget;
@@ -521,6 +528,8 @@ export class Clouds {
   private shadowStrength = 0;
   private ex = 1;
   private size = new THREE.Vector2(1, 1);
+  /** lienzo en px de CSS (para recalcular el volumen si cambia la calidad) y fracción fija (grabaciones) */
+  private css = { w: 1, h: 1, k: undefined as number | undefined };
   private tmp = new THREE.Matrix4();
   private shadowPx: number;
   private lastFast = false;
@@ -542,21 +551,21 @@ export class Clouds {
 
   /**
    * sh = uniformes del relieve para la sombra de las nubes; fields = campos de 270 m (brillo nocturno); haze = bruma
-   * compartida con el relieve.
+   * compartida con el relieve; q = pasos, resolución y ruido según la calidad de imagen.
    */
   constructor(
     private renderer: THREE.WebGLRenderer, hu: HeightUniforms, private sh: CloudShadowUniforms, fields: { value: THREE.Texture },
-    haze: Record<'uHazeColor' | 'uHazeAmt' | 'uHazeRef', THREE.IUniform>, private small: boolean,
+    haze: Record<'uHazeColor' | 'uHazeAmt' | 'uHazeRef', THREE.IUniform>, private q: CloudQuality,
   ) {
     const ext = renderer.extensions;
     const half = ext.has('EXT_color_buffer_float') || ext.has('EXT_color_buffer_half_float');
-    const defines: Record<string, string> = { STEPS: small ? '44' : '72', LSTEPS: small ? '3' : '4', ...(half ? {} : { CLOUD_LDR: '' }) };
+    const defines: Record<string, string> = { STEPS: String(q.steps), LSTEPS: String(q.lsteps), ...(half ? {} : { CLOUD_LDR: '' }) };
     this.params = withAmount(skyFor(this.settings.kind, this.hour).params, this.settings.amount);
-    this.shadowPx = small ? 256 : 512;
+    this.shadowPx = q.shadowPx;
     this.gridMap = hu.uGridMap.value;
 
-    this.noise3 = new THREE.WebGL3DRenderTarget(NOISE, NOISE, NOISE, { depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
-    this.noise3.texture.wrapS = this.noise3.texture.wrapT = this.noise3.texture.wrapR = THREE.RepeatWrapping;
+    this.noiseN = q.noise;
+    this.noise3 = Clouds.noiseTarget(q.noise);
     this.wnoise = new THREE.WebGLRenderTarget(WN, WN, { depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, wrapS: THREE.RepeatWrapping, wrapT: THREE.RepeatWrapping });
     this.shadowRT = new THREE.WebGLRenderTarget(this.shadowPx, this.shadowPx, { depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
     this.rt = new THREE.WebGLRenderTarget(1, 1, { count: 2, depthBuffer: false, type: half ? THREE.HalfFloatType : THREE.UnsignedByteType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
@@ -580,13 +589,14 @@ export class Clouds {
     const pass = (fragmentShader: string, uniforms: Record<string, THREE.IUniform>) => new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3, vertexShader: FULLSCREEN, fragmentShader, uniforms, defines, depthTest: false, depthWrite: false, toneMapped: false,
     });
-    this.genMat = pass(NOISE_GEN, { uZ: { value: 0 }, uMode: { value: 0 }, uRes: { value: new THREE.Vector2(NOISE, NOISE) } });
+    this.genMat = pass(NOISE_GEN, { uZ: { value: 0 }, uMode: { value: 0 }, uRes: { value: new THREE.Vector2(q.noise, q.noise) } });
     this.volMat = pass(VOLUME, {
       ...common, tH0: hu.tH0, tFields: fields, uGridMax: { value: new THREE.Vector2(1, 1) },
       uInvVP: { value: new THREE.Matrix4() }, uCam: { value: new THREE.Vector3() }, uTarget: { value: new THREE.Vector3() }, uFwd: { value: new THREE.Vector3() },
       uSize: { value: new THREE.Vector2(1, 1) }, uBox: { value: new THREE.Vector4() }, uY: { value: new THREE.Vector3() }, uSlope: { value: 0.3 },
       uLightColor: { value: new THREE.Color() }, uAmbTop: { value: new THREE.Color() }, uAmbBottom: { value: new THREE.Color() }, uGlow: { value: new THREE.Color() },
       uHole: { value: new THREE.Vector2() }, uQuality: { value: 1 }, uFlash: { value: new THREE.Vector4() }, uNear: { value: new THREE.Vector2(0.3, 2) },
+      uFrame: { value: 0 },
     });
     this.shMat = pass(SHADOW, { ...common, uSM: { value: new THREE.Vector4() }, uSMSize: { value: this.shadowPx }, uYRef: { value: 0 } });
     this.compMat = new THREE.ShaderMaterial({
@@ -619,18 +629,36 @@ export class Clouds {
     return Promise.all(jobs).then(() => { this.compiled = true; });
   }
 
-  /** Ruido de forma (64³) y del tiempo (256²), una sola vez y en partes: 16 capas por cuadro, sin tirón al aparecer. */
+  /** Ruido 3D de n³ que se repite en sus lados (el sombreador lo genera periódico en [0, 1]). */
+  private static noiseTarget(n: number) {
+    const rt = new THREE.WebGL3DRenderTarget(n, n, n, { depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+    rt.texture.wrapS = rt.texture.wrapT = rt.texture.wrapR = THREE.RepeatWrapping;
+    return rt;
+  }
+
+  /**
+   * Ruido de forma (n³, según la calidad) y del tiempo (256²), una sola vez y en partes: 16 capas por cuadro, sin tirón al
+   * aparecer. Si cambió la calidad, el nuevo se genera aparte y reemplaza al anterior al terminar.
+   */
   private generateSome() {
     const r = this.renderer, u = this.genMat.uniforms, prev = r.getRenderTarget();
+    const b = this.building, rt = b ? b.rt : this.noise3, n = b ? b.n : this.noiseN;
     this.quad.material = this.genMat;
     u.uMode.value = 0;
-    u.uRes.value.set(NOISE, NOISE);
-    for (const end = Math.min(NOISE, this.layers + 16); this.layers < end; this.layers++) {
-      u.uZ.value = (this.layers + 0.5) / NOISE;
-      r.setRenderTarget(this.noise3, this.layers);
+    u.uRes.value.set(n, n);
+    for (const end = Math.min(n, this.layers + 16); this.layers < end; this.layers++) {
+      u.uZ.value = (this.layers + 0.5) / n;
+      r.setRenderTarget(rt, this.layers);
       r.render(this.quadScene, this.quadCam);
     }
-    if (this.layers >= NOISE) {
+    if (this.layers >= n && b) {
+      this.noise3.dispose();
+      this.noise3 = b.rt;
+      this.noiseN = b.n;
+      this.volMat.uniforms.tNoise.value = this.shMat.uniforms.tNoise.value = b.rt.texture;
+      this.building = null;
+      this.shadowDirty = true;
+    } else if (this.layers >= n) {
       u.uMode.value = 1;
       u.uRes.value.set(WN, WN);
       r.setRenderTarget(this.wnoise);
@@ -639,6 +667,38 @@ export class Clouds {
     }
     r.setRenderTarget(prev);
   }
+
+  /** Pasos, resolución, ruido y sombra según la calidad de imagen (el volumen se recompila si cambian los pasos). */
+  setQuality(q: CloudQuality) {
+    const d = this.volMat.defines as Record<string, string>;
+    if (d.STEPS !== String(q.steps) || d.LSTEPS !== String(q.lsteps)) {
+      d.STEPS = String(q.steps);
+      d.LSTEPS = String(q.lsteps);
+      this.volMat.needsUpdate = true;
+    }
+    if (q.shadowPx !== this.shadowPx) {
+      this.shadowPx = q.shadowPx;
+      this.shadowRT.setSize(q.shadowPx, q.shadowPx);
+      this.shMat.uniforms.uSMSize.value = q.shadowPx;
+      this.shadowDirty = true;
+    }
+    const want = this.building?.n ?? this.noiseN;
+    if (q.noise !== want) {
+      this.building?.rt.dispose();
+      this.building = null;
+      if (q.noise !== this.noiseN) {
+        // antes de generarse por primera vez basta con cambiar el destino
+        if (!this.generated) { this.noise3.dispose(); this.noise3 = Clouds.noiseTarget(q.noise); this.noiseN = q.noise; this.layers = 0; this.volMat.uniforms.tNoise.value = this.shMat.uniforms.tNoise.value = this.noise3.texture; }
+        else { this.building = { rt: Clouds.noiseTarget(q.noise), n: q.noise }; this.layers = 0; }
+      }
+    }
+    this.q = q;
+    this.size.set(0, 0);
+    this.setSize(this.css.w, this.css.h, this.css.k);
+  }
+
+  /** Cuadro que se acumula en reposo (0 = el normal): cambia el inicio al azar de los recorridos. */
+  setFrame(k: number) { this.volMat.uniforms.uFrame.value = k; }
 
   /** Centros de las celdas de tormenta (máximos locales del canal g) y su número al azar, para los relámpagos. */
   private findCells() {
@@ -818,7 +878,7 @@ export class Clouds {
     // con cantidad 0 (o sin imagen del satélite todavía) no queda nada que dibujar: se apagan las pasadas
     const some = this.live ? (this.volMat.uniforms.uLive.value as THREE.Vector4).x > 0 : this.params.cover + this.params.storm + this.params.fog > 0.002;
     const want = this.on && !this.suppressed && some && !!this.grid && this.compiled && allowed;
-    if (want && !this.generated) { this.generateSome(); changed = true; }
+    if (want && (!this.generated || this.building)) { this.generateSome(); changed = true; }
     const target = want && this.generated ? 1 : 0;
     if (this.fade !== target) {
       this.fade = target > this.fade ? Math.min(target, this.fade + dt / 0.9) : Math.max(target, this.fade - dt / 0.6);
@@ -892,10 +952,12 @@ export class Clouds {
   }
 
   /**
-   * Tamaño del lienzo en px de CSS: el volumen se calcula a la mitad (menos en pantallas muy grandes o celulares). k fija
-   * la fracción (las grabaciones usan 1: resolución completa).
+   * Tamaño del lienzo en px de CSS: el volumen se calcula a una fracción según la calidad (la mitad en Normal; menos en
+   * pantallas muy grandes o celulares). fixed fija la fracción (las grabaciones usan 1: resolución completa).
    */
-  setSize(w: number, h: number, k = Math.min(this.small ? 0.4 : 0.5, Math.sqrt(560000 / Math.max(1, w * h)))) {
+  setSize(w: number, h: number, fixed?: number) {
+    this.css = { w, h, k: fixed };
+    const k = fixed ?? Math.min(this.q.res, Math.sqrt(this.q.maxPx / Math.max(1, w * h)));
     const cw = Math.max(1, Math.round(w * k)), ch = Math.max(1, Math.round(h * k));
     if (cw === this.size.x && ch === this.size.y) return;
     this.size.set(cw, ch);
@@ -994,6 +1056,7 @@ export class Clouds {
     this.worker?.terminate();
     this.live?.dispose();
     for (const tex of new Set([...this.liveTex, this.blank])) tex.dispose();
+    this.building?.rt.dispose();
     for (const d of [this.noise3, this.wnoise, this.shadowRT, this.rt, this.genMat, this.volMat, this.shMat, this.compMat, this.weather, this.quad.geometry, this.composite.geometry]) d.dispose();
   }
 }

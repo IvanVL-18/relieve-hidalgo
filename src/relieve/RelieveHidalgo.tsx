@@ -10,10 +10,11 @@ import { useCallback, useEffect, useImperativeHandle, useRef, useState, type CSS
 import type { Datasets } from './analyses/datasets';
 import { ANALYSES, SCHOOL_ANALYSES } from './analyses/registry';
 import type { SceneApi, SceneChange, ViewerMode } from './analyses/types';
-import type { LayerKey, Layers, LoadStage, MunicipioInfo, ReadyInfo, ReliefEngine } from './engine/Engine';
+import type { LayerKey, Layers, LoadStage, MunicipioInfo, QualityInfo, ReadyInfo, ReliefEngine } from './engine/Engine';
 import { CLOUD_DEFAULTS, CLOUD_KINDS, skyFor, windName, type CloudKind, type CloudSettings } from './shared/clouds';
 import { archiveRange, dayIso, dayStartOf, mxHour, type LiveCloudsStatus } from './shared/goes';
 import { viewStateUrl, type ViewState } from './shared/enlaces';
+import { QUALITY_LEVELS, isQualitySetting, tierRank, type QualitySetting } from './shared/quality';
 import type { SearchItem } from './engine/search';
 import { BASE_MAPS, type BaseMapId } from './shared/basemaps';
 import { USV_GROUPS } from './shared/usv';
@@ -42,7 +43,13 @@ export interface RelieveHidalgoProps {
   title?: string;
   /** carpeta pública con elev.bin, muni.bin y vec.bin; por omisión los empaqueta el bundler */
   dataBaseUrl?: string;
-  quality?: 'auto' | 'high' | 'low';
+  /**
+   * calidad de imagen al abrir: auto (según la tarjeta gráfica), low (Básica), medium (Normal), high (Alta) o ultra
+   * (Máxima). Sin ella, la última que eligió quien mira en «Capas y luz» (se guarda en su navegador) o auto
+   */
+  quality?: QualitySetting;
+  /** quien mira cambió la calidad en «Capas y luz» */
+  onQualityChange?: (q: QualitySetting) => void;
   initialExaggeration?: number;
   /** hora local de México, 5–20 */
   initialHour?: number;
@@ -96,9 +103,9 @@ export interface RelieveHidalgoProps {
   ref?: Ref<RelieveApi>;
 }
 
-const DEFAULT_LAYERS: Layers = { water: true, places: true, borders: true, contours: false, clouds: true };
+const DEFAULT_LAYERS: Layers = { water: true, places: true, borders: true, contours: false, clouds: true, buildings: true };
 const LAYER_LABELS: [LayerKey, string][] = [
-  ['water', 'Ríos y presas'], ['places', 'Localidades'], ['borders', 'Municipios'], ['contours', 'Curvas de nivel'], ['clouds', 'Nubes'],
+  ['water', 'Ríos y presas'], ['places', 'Localidades'], ['borders', 'Municipios'], ['contours', 'Curvas de nivel'], ['clouds', 'Nubes'], ['buildings', 'Edificios'],
 ];
 const STAGE_TEXT: Record<LoadStage, string> = {
   download: 'Descargando el relieve…', build: 'Levantando el relieve…', gpu: 'Preparando la vista…',
@@ -122,6 +129,10 @@ const fmtDate = (day: string, weekday = true) => {
 /** «12 min» o «1 h 5 min» desde un instante */
 const fmtAgo = (ms: number) => { const m = Math.max(0, Math.round((Date.now() - ms) / 60e3)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
 const fmtN = (n: number) => Math.round(n).toLocaleString('es-MX').replace(/,/g, ' ');
+/** Calidad que eligió quien mira (guardada en su navegador; puede no haber almacenamiento). */
+const QUALITY_KEY = 'rh-calidad';
+const storedQuality = (): QualitySetting | null => { try { const v = localStorage.getItem(QUALITY_KEY); return isQualitySetting(v) ? v : null; } catch { return null; } };
+const storeQuality = (q: QualitySetting) => { try { localStorage.setItem(QUALITY_KEY, q); } catch { /* sin almacenamiento */ } };
 /** Corre fn cuando el navegador está libre (o a los 1.5 s donde no hay requestIdleCallback, como Safari). */
 const whenIdle = (fn: () => void) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 4000 }) : setTimeout(fn, 1500));
 const altRampCss = 'linear-gradient(90deg,' + ALT_STOPS_HEX.filter(s => s[0] <= 3300).map(([e, c]) => `${c} ${((e / 3300) * 100).toFixed(1)}%`).join(',') + ')';
@@ -186,14 +197,29 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
   const [is2D, setIs2D] = useState(false);
   // cómo moverse: se muestra al llegar hasta que la persona toca el mapa
   const [tips, setTips] = useState(true);
+  // calidad de imagen: la elegida (prop, la guardada o auto) y lo que dice el motor (nivel en uso, tarjeta gráfica)
+  const [quality, setQuality] = useState<QualitySetting>(() => props.quality ?? storedQuality() ?? 'auto');
+  const qualityRef = useRef(quality);
+  qualityRef.current = quality;
+  const [qInfo, setQInfo] = useState<QualityInfo | null>(null);
+  // el visor se vuelve a crear (de o hacia Básica) con la vista y el análisis de ese momento
+  const [engineGen, setEngineGen] = useState(0);
+  const restoreRef = useRef<ViewState | null>(null);
 
   // el motor (y three.js) se carga aparte para no pesar en la página que lo incrusta
   useEffect(() => {
     let cancelled = false, engine: ReliefEngine | null = null;
     const root = rootRef.current!;
-    if (root.clientWidth < 640 || root.clientHeight < 760 || firstAnalysis) setPanelOpen(false);
-    if (root.clientWidth < 640 || root.clientHeight < 600) setLegendOpen(false);
-    setSmall(root.clientWidth < 640);
+    // al volver a crearlo: la vista y el municipio de ese momento en vez de los del enlace inicial
+    const rs = restoreRef.current;
+    restoreRef.current = null;
+    const start = rs ?? iv, openAnalysis = rs ? !!rs.analysis : !!firstAnalysis;
+    if (rs) { setStage('download'); setInfo(null); setDatasets(null); }
+    else {
+      if (root.clientWidth < 640 || root.clientHeight < 760 || firstAnalysis) setPanelOpen(false);
+      if (root.clientWidth < 640 || root.clientHeight < 600) setLegendOpen(false);
+      setSmall(root.clientWidth < 640);
+    }
     let data: Datasets | null = null;
     import('./engine/Engine').then(({ ReliefEngine }) => {
       if (cancelled) return;
@@ -207,21 +233,22 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
           },
           {
             dataBaseUrl: props.dataBaseUrl,
-            quality: props.quality,
+            quality: qualityRef.current,
             exaggeration: exag, hour, layers, baseMap, clouds,
             liveCloudsUrl: props.liveCloudsUrl,
             onLiveClouds: s => setLive(s),
             onHourChange: h => setHour(h),
             // un enlace con vista abre quieto en ella
-            autoRotate: (props.autoRotate ?? true) && !iv.view && !kiosk,
+            autoRotate: (props.autoRotate ?? true) && !start.view && !kiosk,
             cooperativeGestures: props.cooperativeGestures ?? false,
             debug: props.debug,
             onProgress: s => setStage(s),
             onReady: i => {
               setStage('ready'); setInfo(i);
+              if (engine) setQInfo(engine.quality);
               if (propsRef.current.municipioColors) engine?.setMunicipioColors(propsRef.current.municipioColors);
-              if (iv.view) engine?.setView(iv.view, 0);
-              if (iv.municipio && !firstAnalysis) engine?.select(Number(iv.municipio.slice(2)), !iv.view);
+              if (start.view) engine?.setView(start.view, 0);
+              if (start.municipio && !openAnalysis) engine?.select(Number(start.municipio.slice(2)), !start.view);
               // los datos de los análisis se cargan aparte y solo cuando se abre uno
               import('./analyses/datasets').then(({ createDatasets }) => {
                 if (cancelled || !engine) return;
@@ -252,9 +279,9 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
       }
     }).catch(() => { if (!cancelled) { setStage('error'); setError('No se pudo cargar el visor. Revisa tu conexión y recarga.'); } });
     return () => { cancelled = true; data?.dispose(); engine?.dispose(); engineRef.current = null; };
-    // el motor se crea una sola vez; los cambios posteriores pasan por los efectos de abajo
+    // el motor se crea una vez (y otra si la calidad pasa de o hacia Básica); los demás cambios pasan por los efectos de abajo
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [engineGen]);
 
   useEffect(() => { if (stage === 'ready') engineRef.current?.setMunicipioColors(props.municipioColors ?? null); }, [props.municipioColors, stage]);
 
@@ -370,6 +397,20 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
     setBaseMap(id);
     const p = eng()?.setBaseMap(id);
     if (p && id !== 'altitud') { setBaseLoading(true); p.finally(() => setBaseLoading(false)); }
+  };
+  // calidad de imagen: casi todo cambia al momento; de o hacia Básica el visor se vuelve a crear en la misma vista
+  const chooseQuality = (q: QualitySetting) => {
+    if (q === quality) return;
+    setQuality(q);
+    qualityRef.current = q;
+    storeQuality(q);
+    propsRef.current.onQualityChange?.(q);
+    const e = eng();
+    if (!e) return;
+    if (e.setQuality(q)) { setQInfo(e.quality); return; }
+    restoreRef.current = viewState();
+    linkParams.current = analysis ? params : null;
+    setEngineGen(g => g + 1);
   };
   const openAnalysis = useCallback((id: string | null) => {
     linkParams.current = null;
@@ -536,7 +577,8 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                   <div className="rh-psec">
                     <div className="rh-psec-title">Capas</div>
                     <div className="rh-toggles rh-checks" role="group" aria-label="Capas">
-                      {LAYER_LABELS.map(([k, t]) => (
+                      {/* (en Básica no hay edificios) */}
+                      {LAYER_LABELS.filter(([k]) => k !== 'buildings' || (qInfo && qInfo.tier !== 'low')).map(([k, t]) => (
                         <button key={k} type="button" aria-pressed={layers[k]} onClick={() => toggleLayer(k)}>{t}</button>
                       ))}
                     </div>
@@ -645,6 +687,16 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                     </div>
                   </div>
 
+                  <div className="rh-psec">
+                    <div className="rh-psec-title">Calidad de imagen</div>
+                    <div className="rh-seg rh-seg5" role="radiogroup" aria-label="Calidad de imagen">
+                      {QUALITY_LEVELS.map(l => (
+                        <button key={l.id} type="button" role="radio" aria-checked={quality === l.id} title={l.hint} disabled={!ready} onClick={() => chooseQuality(l.id)}>{l.label}</button>
+                      ))}
+                    </div>
+                    <p className="rh-cap">{qualityCaption(quality, qInfo)}</p>
+                  </div>
+
                   <details className="rh-psec rh-more">
                     <summary>Cómo moverse en el mapa</summary>
                     <dl className="rh-howto">
@@ -656,6 +708,7 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
                     <p className="rh-cap">
                       Elevación: INEGI (Continental relief 2016) y USGS (SRTM, GMTED2010), vía Terrain Tiles (AWS) · Ríos y presas: © OpenStreetMap y red de drenaje calculada del relieve · Límites: INEGI 2022 · Localidades y colonias: INEGI (Censo 2020, catálogo de localidades y DENUE)
                       {layers.clouds && (isLive ? ` · Nubes ${pastDay ? 'del ' + fmtDate(pastDay, false) : 'de hoy'}: satélite GOES-Este (NOAA), vía NASA GIBS (ESDIS); alturas estimadas por la temperatura de la cima` : ' · Nubes: simuladas, según la lluvia media anual de INEGI')}
+                      {layers.buildings && qInfo && qInfo.tier !== 'low' && ' · Edificios: © Microsoft (Global ML Building Footprints, ODbL); alturas estimadas por el tamaño de la huella y la densidad de cada zona'}
                       {baseCredit && ` · ${baseCredit}`}
                     </p>
                   </details>
@@ -740,6 +793,18 @@ export function RelieveHidalgo(props: RelieveHidalgoProps) {
       {menuOpen && <AnalysisMenu active={analysis} onPick={openAnalysis} onClose={closeMenu} ids={school ? SCHOOL_ANALYSES : undefined} title={school ? 'Temas para clase' : 'Análisis'} />}
     </div>
   );
+}
+
+/** Qué hace la calidad elegida; en Auto, cuál se eligió para esta tarjeta gráfica, y si una más alta puede ir lenta. */
+function qualityCaption(q: QualitySetting, info: QualityInfo | null) {
+  const level = (id: QualitySetting) => QUALITY_LEVELS.find(l => l.id === id)!;
+  if (!info) return q === 'auto' ? level('auto').hint + '.' : level(q).hint;
+  const tier = q === 'auto' ? info.auto : q;
+  const kind = info.gpuKind === 'integrated' ? ' (integrada)' : info.gpuKind === 'discrete' ? ' (dedicada)' : '';
+  const card = info.gpu ? info.gpu + kind : 'esta tarjeta gráfica';
+  if (q === 'auto') return `${level(tier).label} para ${card}. ${level(tier).hint}`;
+  const slow = tierRank(tier) > tierRank(info.auto) ? ` Con ${card} puede ir lento: al moverte la resolución baja sola y al detenerte vuelve.` : '';
+  return level(tier).hint + slow;
 }
 
 /** Lo que dice la leyenda de cada mapa base. */

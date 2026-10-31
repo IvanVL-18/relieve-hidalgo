@@ -18,6 +18,13 @@ que se puede incrustar en cualquier sitio React.
 - Ríos calculados del relieve y guiados por OpenStreetMap, presas, límites municipales de INEGI, curvas de nivel,
   localidades del censo y regiones. Las líneas se ven nítidas a cualquier acercamiento.
 - Sol en su posición real para la hora elegida; de noche se encienden las 4 690 localidades según su población.
+- **Edificios** en 3D al acercarse: 1.3 millones de huellas de Hidalgo (Microsoft, detectadas en imágenes de satélite),
+  apoyadas en el relieve con su altura real; la altura no viene en los datos y se estima por el tamaño de cada huella y
+  la densidad de su zona.
+- **Calidad de imagen** («Capas y luz»): Auto elige según la tarjeta gráfica; Básica para equipos lentos o celulares,
+  Normal la de siempre, y Alta y Máxima para tarjetas dedicadas: sombras trazadas sobre el relieve fino, agua con el
+  reflejo del cielo y el camino de destellos del Sol, nubes más definidas, más relieve fino a lo lejos y, al detenerse,
+  bordes sin dientes (varios cuadros desplazados que se promedian). Al moverse la resolución baja sola.
 - Nubes en 3D iluminadas por el Sol de esa hora y con su sombra sobre el relieve: cielo automático (mar de nubes al
   amanecer, cúmulos de día, tormentas con relámpagos por la tarde), cúmulos, nublado, niebla o tormenta, con cantidad,
   dirección del viento y lapso de tiempo. Se forman más donde llueve más (lluvia media anual de INEGI), su base sigue al
@@ -96,8 +103,8 @@ Parámetros: `?vista=lon,lat,km,inclinación,rumbo` (cámara; km = distancia al 
 parámetros `a.*` (por ejemplo `&a.punto=-98.7654,21.2387` en cuencas), `?mapa=satelite` o `?mapa=altitud`, `?hora=19.5`,
 `?exag=3`, `?mun=13048`, `?nubes=tormenta` (o `auto`, `cumulos`, `nublado`, `niebla`, `hoy` para las del satélite —con `&dia=2026-09-11`, las de otro día—, `no`), `?lapso` (nubes en
 movimiento), `?quieto` (sin giro), `?embed` (el mapa dentro de una página normal), `?kiosco` (recorridos en bucle para una
-pantalla táctil: sin buscador, menú ni paneles; si alguien toma el mapa, el recorrido sigue a los 45 s) y `?escuelas`
-(interfaz para clase).
+pantalla táctil: sin buscador, menú ni paneles; si alguien toma el mapa, el recorrido sigue a los 45 s), `?escuelas`
+(interfaz para clase) y `?calidad=alta` (o `auto`, `basica`, `normal`, `maxima`: fuerza la calidad de imagen).
 
 Los datos procesados ya vienen en `src/relieve/data/`, así que no hace falta descargar nada para correrlo.
 
@@ -126,6 +133,10 @@ El cielo inicial se elige con `initialClouds={{ kind: 'niebla', amount: 0.7, win
 otro día de los últimos 90; en el panel, el selector de día). Las imágenes las pide el navegador de cada visitante a
 NASA solo cuando elige «Del satélite»; `liveCloudsUrl="/api/gibs"` las pide a un proxy propio (con las mismas rutas `/wms/…` y `/wmts/…` de GIBS) y
 `liveCloudsUrl={null}` quita la opción.
+
+La calidad de imagen la elige quien mira en «Capas y luz» y se guarda en su navegador; `quality="high"` (o `auto`,
+`low`, `medium`, `ultra`) fija con cuál abre, y `onQualityChange` avisa cuando la cambia. Los edificios son una capa
+más (`initialLayers={{ buildings: false }}` los apaga) y no existen en calidad Básica.
 
 Para los enlaces a vistas, el componente no toca el historial del navegador: el anfitrión decide. Con la URL de la
 página:
@@ -228,6 +239,7 @@ no la necesita: lee archivos estáticos comprimidos. La base es para consultas, 
 | Unidades médicas | Secretaría de Salud, catálogo CLUES (agosto 2026) | Datos abiertos del Gobierno de México |
 | Escuelas | INEGI, DENUE | Términos de libre uso del INEGI |
 | Carreteras, ríos, presas | © colaboradores de OpenStreetMap | ODbL 1.0 |
+| Edificios (huellas) | Microsoft, Global ML Building Footprints (versión 2026-02-03); alturas estimadas por el visor | ODbL 1.0 |
 | Geositios del Geoparque Comarca Minera | Canet, C. et al. (2017), Terra Digitalis 1(2), UNAM: tabla de los 31 geositios con coordenadas | Se usan los datos (nombres, interés y ubicación), citando el artículo |
 | Fotos de los geositios y Pueblos Mágicos | Wikimedia Commons (autor y licencia en cada ficha: CC BY, CC BY-SA o CC0) | La de cada foto |
 | Regiones geoculturales | Secretaría de Cultura del Estado de Hidalgo, mapa de regiones geoculturales (2019) | Información pública del Gobierno del Estado |
@@ -260,6 +272,8 @@ Estas atribuciones aparecen en el mapa y en la imagen descargable, y deben conse
   Hidalgo; el análisis se compara con las zonas de peligro del atlas estatal y con 216 deslizamientos registrados en
   2008 y 2009: el 54 % cayó en las laderas de susceptibilidad alta o muy alta, que ocupan el 20 % del estado. Esos
   registros están junto a caminos y poblados, donde alguien los reportó.
+- Los **edificios** son huellas detectadas automáticamente en imágenes de satélite: faltan algunos y otros salen unidos
+  o recortados. Su altura es una estimación (área de la huella y densidad de la zona), no una medición.
 - El **cambio de uso de suelo** compara series 1:250 000: los cambios pequeños no se ven y parte de las diferencias son
   de interpretación entre series.
 - En las planicies, el relieve de INEGI trae un rayado; al acercarse, el sombreado de 30 m se usa solo en laderas.

@@ -29,7 +29,7 @@ function credits(scene: SceneApi, extra?: string) {
   const s = scene.get(), base = BASE_MAPS.find(b => b.id === s.baseMap)?.credit;
   return [
     'Relieve: INEGI (Continental relief 2016) y USGS, vía Terrain Tiles', 'Ríos y presas: © OpenStreetMap', 'Límites y localidades: INEGI',
-    base, s.layers.clouds ? (s.clouds.kind === 'hoy' ? 'Nubes: GOES-Este (NOAA), vía NASA GIBS' : 'Nubes simuladas') : '', extra,
+    base, s.layers.clouds ? (s.clouds.kind === 'hoy' ? 'Nubes: GOES-Este (NOAA), vía NASA GIBS' : 'Nubes simuladas') : '', s.layers.buildings ? 'Edificios: © Microsoft (ODbL)' : '', extra,
     `Exageración vertical ${s.exaggeration.toLocaleString('es-MX')}×`,
   ].filter(Boolean).join(' · ');
 }

@@ -2,7 +2,7 @@
 /**
  * Descarga las fuentes públicas a data-src/cache/ (se omiten las que ya están; --force para renovar).
  *   node scripts/pipeline/fetch.mjs [relieve agua iter denue catalogo conapo clues usv usv6 lluvia rocas deslizamientos chirps cenapred vias
- *                                    satelite solar atlas_solar muestra muestra_dic climas provincias topoformas]
+ *                                    satelite solar atlas_solar muestra muestra_dic climas provincias topoformas edificios]
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -145,7 +145,38 @@ async function fetchCenapred() {
   }
 }
 
+/** Cuadrículas z9 de Bing (quadkey) que tocan el rectángulo del mapa. */
+function quadkeys(z) {
+  const n = 2 ** z, tx = lon => Math.floor(((lon + 180) / 360) * n);
+  const ty = lat => { const r = (lat * Math.PI) / 180; return Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n); };
+  const keys = [];
+  for (let x = tx(BBOX.w); x <= tx(BBOX.e); x++) for (let y = ty(BBOX.n); y <= ty(BBOX.s); y++) {
+    let k = '';
+    for (let i = z; i > 0; i--) k += String(((x >> (i - 1)) & 1) + 2 * ((y >> (i - 1)) & 1));
+    keys.push(k);
+  }
+  return keys;
+}
+
+/** Huellas de edificios de Microsoft: los archivos de México de las cuadrículas z9 del mapa (~540 MB), 4 a la vez. */
+async function fetchBuildings() {
+  const src = SOURCES.edificios, keys = new Set(quadkeys(9));
+  const list = await download(src.url, src.file + 'dataset-links.csv', { force });
+  const rows = fs.readFileSync(list, 'utf8').split('\n').map(l => l.split(',')).filter(r => r[0] === src.region && keys.has(r[1]));
+  log(`edificios: ${rows.length} archivos de ${keys.size} cuadrículas`);
+  let done = 0;
+  const worker = async () => {
+    for (let r; (r = rows.shift()); ) {
+      const part = /part-(\d+)-/.exec(r[2])?.[1] ?? '0';
+      await download(r[2], `${src.file}${r[1]}-${part}.csv.gz`, { force });
+      log(`  ${++done} · ${r[1]} (${r[3]})`);
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+}
+
 if (want('relieve')) await fetchTiles(SOURCES.relieve, 12, 'png');
+if (want('edificios')) await fetchBuildings();
 if (want('agua')) await fetchWater().catch(e => log(`agua: ${e.message}; se usará la copia de data-src/osm_agua.json.gz`));
 for (const k of ['iter', 'denue', 'imm', 'iml', 'clues', 'usv', 'usv6', 'lluvia', 'rocas', 'climas', 'provincias', 'topoformas', 'deslizamientos', 'atlas_solar', 'muestra', 'muestra_dic']) {
   if (!want(k)) continue;

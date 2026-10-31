@@ -64,3 +64,16 @@ test('parches: más finos cerca de la cámara', () => {
   assert.equal(spacing[145 * W + 153], 1 / 8);
   assert.ok(spacing[20 * W + 150] > 1 / 8);
 });
+
+test('parches: la calidad cambia la profundidad sin perder la cobertura (nivel 9 de Máxima y vuelta a 8)', () => {
+  const { lod, state } = makeLod();
+  const cam = new THREE.Vector3(40, 6, 40);
+  for (const o of [{ depth: 9, range: 22 }, { depth: 8, range: 40 }, { depth: 8, range: 30 }]) {
+    lod.setOptions(o);
+    lod.update(cam, everything(), 0.01, 2.5);
+    const { cover, spacing } = coverage(lod);
+    for (let i = 0; i < W * H; i++) if (state[i]) assert.equal(cover[i], 1, `${JSON.stringify(o)}: celda ${i} cubierta ${cover[i]} veces`);
+    // bajo la cámara, cuadros de 32 / 2^depth de celda (1/16 en el nivel 9)
+    assert.equal(spacing[145 * W + 153], 32 / 2 ** o.depth, JSON.stringify(o));
+  }
+});

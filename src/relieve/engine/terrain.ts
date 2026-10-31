@@ -19,7 +19,7 @@ export interface LodOptions {
 
 const ROOT = 1024;            // celdas por lado del nodo raíz (potencia de 2 ≥ la rejilla)
 const MARGIN_M = 400;         // holgura vertical de las cajas: el relieve fino se sale del promedio de 270 m
-const MAX_INSTANCES = 4096;
+const MAX_INSTANCES = 16384;  // Máxima (nivel 9, más denso) llega a ~6 000 parches
 
 /** Malla de un parche: (n + 1)² vértices con x = i, z = j (índices); las instancias dan origen y espaciado. */
 function patchGeometry(n: number) {
@@ -61,6 +61,8 @@ export class TerrainLod {
   private levels: Level[] = [];
   private ranges: number[] = [];
   private frame: GridFrame = { x0: 0, z0: 0, sx: 1, sz: 1 };
+  /** relieve y celdas del estado (para rehacer los niveles si cambia la profundidad) */
+  private data: { elev: Float32Array; state: Uint8Array; W: number; H: number } | null = null;
   private casterCount = 0;
   private box = new THREE.Box3();
   private count = { full: 0, quarter: 0 };
@@ -69,8 +71,7 @@ export class TerrainLod {
 
   /** Las mallas se crean sin datos (para compilar los sombreadores mientras llegan); setData pone el relieve. */
   constructor(material: THREE.Material, casterMaterial: THREE.Material, casterDepth: THREE.Material, private opt: LodOptions) {
-    const D = opt.depth;
-    for (let d = 0; d <= D; d++) this.ranges.push(opt.range * 2 ** (D - d));
+    this.setRanges();
     this.full = new THREE.Mesh(patchGeometry(opt.n), material);
     this.quarter = new THREE.Mesh(patchGeometry(opt.n / 2), material);
     for (const m of [this.full, this.quarter]) {
@@ -91,9 +92,25 @@ export class TerrainLod {
     this.caster.onAfterShadow = () => { cg.instanceCount = 0; };
   }
 
+  private setRanges() {
+    const D = this.opt.depth;
+    this.ranges = [];
+    for (let d = 0; d <= D; d++) this.ranges.push(this.opt.range * 2 ** (D - d));
+  }
+
+  /** Cambia la profundidad del árbol o el rango del nivel más fino (calidad de imagen); la próxima update() los usa. */
+  setOptions(o: Partial<Pick<LodOptions, 'depth' | 'range'>>) {
+    const depth = o.depth ?? this.opt.depth;
+    this.opt = { ...this.opt, ...o };
+    this.setRanges();
+    if (this.data && depth !== this.levels.length - 1) this.setData(this.frame, this.data.elev, this.data.state, this.data.W, this.data.H);
+  }
+
   /** Relieve de 270 m y celdas del estado (con margen): cajas de cada nivel e instancias de la sombra. */
   setData(frame: GridFrame, elev: Float32Array, state: Uint8Array, W: number, H: number) {
     this.frame = frame;
+    this.data = { elev, state, W, H };
+    this.levels = [];
     const D = this.opt.depth;
     // cajas por nivel: del más fino (nodos de ROOT / 2^D celdas) hacia la raíz
     const nD = 2 ** D, sD = ROOT / nD;

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { RelieveHidalgo, decodeViewState, viewStateUrl, type MunicipioInfo, type ReadyInfo, type RelieveApi, type ViewState } from './relieve';
+import { RelieveHidalgo, decodeViewState, viewStateUrl, type MunicipioInfo, type QualitySetting, type ReadyInfo, type RelieveApi, type ViewState } from './relieve';
 import type { ReliefEngine } from './relieve/engine/Engine';
 import meta from './relieve/data/meta.json';
 
@@ -12,6 +12,9 @@ const debugHooks = import.meta.env.DEV
     }
   : {};
 
+/** ?calidad=auto|basica|normal|alta|maxima: fuerza la calidad de imagen (para probar; si no, la que se guardó en el navegador). */
+const QUALITY_PARAM: Record<string, QualitySetting | undefined> = { auto: 'auto', basica: 'low', normal: 'medium', alta: 'high', maxima: 'ultra' };
+
 /** La URL sigue a la vista (como en un mapa web): reemplaza la entrada del historial, no agrega una por movimiento. */
 const keepUrl = (s: ViewState) => history.replaceState(history.state, '', viewStateUrl(location.href, s));
 
@@ -19,7 +22,7 @@ const keepUrl = (s: ViewState) => history.replaceState(history.state, '', viewSt
  * Pantalla completa, como el artefacto. La URL guarda la vista (enlaces a vistas, shared/enlaces.ts): ?vista=lon,lat,km,
  * inclinación,rumbo · ?mapa=satelite|altitud · ?hora=19.5 · ?exag=3 · ?nubes=auto|cumulos|nublado|niebla|tormenta|no ·
  * ?mun=13048 · ?analisis=accesibilidad (con sus parámetros a.*). Además: ?quieto · ?embed · ?lapso (nubes en movimiento) ·
- * ?kiosco (recorrido guiado en bucle para un módulo táctil) · ?escuelas (interfaz simplificada para clase)
+ * ?kiosco (recorrido guiado en bucle para un módulo táctil) · ?escuelas (interfaz simplificada para clase) · ?calidad=maxima
  */
 export function App() {
   const qs = new URLSearchParams(location.search);
@@ -29,6 +32,7 @@ export function App() {
     <RelieveHidalgo
       style={{ position: 'fixed', inset: 0, height: 'auto' }}
       mode={mode}
+      quality={QUALITY_PARAM[qs.get('calidad') ?? '']}
       initialView={decodeViewState(location.search)}
       // en el kiosco la URL no cambia (se recarga igual si alguien la toca)
       onViewChange={mode === 'kiosco' ? undefined : keepUrl}
